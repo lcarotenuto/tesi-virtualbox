@@ -1,0 +1,30 @@
+\documentclass[article, 12pt, titlepage]{report}
+\usepackage[english]{babel}
+\usepackage{listings}
+\usepackage{setspace}
+\usepackage{color}
+\usepackage{mathptmx}
+\usepackage[dvipsnames]{xcolor}
+
+
+\begin{document}
+
+\newcommand{\emptyPage}{\newpage\shipout\null}
+
+\lstset{basicstyle=\scriptsize\ttfamily, keywordstyle=\color{OliveGreen}, commentstyle=\color{blue}, stringstyle=\color{red}, showstringspaces=false,breaklines=true, tabsize=4, frame=single, rulecolor=\color{black}}
+\raggedbottom
+
+\tableofcontents{}
+\chapter{Introduction}
+\section{ciaociao}
+\section{sect2}
+\subsection{subsect}
+ciao sono luca
+\begin{lstlisting}[language=c]
+int i = 0;
+char *str = "prova"; //ciao
+\end{lstlisting}
+\chapter{fine}
+fine
+	
+\end{document}
