@@ -1,30 +1,49 @@
-\documentclass[article, 12pt, titlepage]{report}
+\documentclass[a4paper, 12pt, titlepage]{report}
 \usepackage[english]{babel}
 \usepackage{listings}
 \usepackage{setspace}
 \usepackage{color}
 \usepackage{mathptmx}
+\usepackage{titlesec}
+\usepackage{lipsum}
 \usepackage[dvipsnames]{xcolor}
-
-
-\begin{document}
 
 \newcommand{\emptyPage}{\newpage\shipout\null}
 
-\lstset{basicstyle=\scriptsize\ttfamily, keywordstyle=\color{OliveGreen}, commentstyle=\color{blue}, stringstyle=\color{red}, showstringspaces=false,breaklines=true, tabsize=4, frame=single, rulecolor=\color{black}}
-\raggedbottom
+\lstset
+{
+	basicstyle=\scriptsize\ttfamily,keywordstyle=\color{OliveGreen},
+	commentstyle=\color{blue},stringstyle=\color{red},showstringspaces=false,
+   	breaklines=true,tabsize=4, frame=single, rulecolor=\color{black}
+}
 
-\tableofcontents{}
+\begin{document}
+
+\tableofcontents
+
 \chapter{Introduction}
-\section{ciaociao}
-\section{sect2}
-\subsection{subsect}
-ciao sono luca
-\begin{lstlisting}[language=c]
-int i = 0;
-char *str = "prova"; //ciao
-\end{lstlisting}
-\chapter{fine}
-fine
+
+\chapter{VirtualBox}
+\section{VirtualBox features}
+Soluzioni di virtualizzazione: Software virt, HW virt.
+\section{VirtualBox architecture}
+TUTTO CAPITOLO 10 del manuale (componenti, moduli, etc)
+\subsection{Software virtualization}
+\subsection{Hardware virtualization}
+\subsection{EMT threads}
+\subsection{Device emulation and Network Transport Drivers}
+\subsubsection{Emulated devices}
+\paragraph{e1000}
+\paragraph{PCNet}
+\paragraph{VirtIO}
+\subsubsection{Networking architectures}
+\paragraph{NAT}
+\paragraph{Bridged networking}
+\paragraph{Internal networking}
+\paragraph{Host-only}
+\section{E1000 network adapters}
+\chapter{Optimization of emulated e1000 performance}
+\section{Current implementation on VirtualBox}
+\chapter{Conclusions}
 	
 \end{document}
