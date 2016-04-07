@@ -1,4 +1,5 @@
 \documentclass[a4paper, 12pt, titlepage]{report}
+
 \usepackage[english]{babel}
 \usepackage{listings}
 \usepackage{setspace}
@@ -6,10 +7,12 @@
 \usepackage{mathptmx}
 \usepackage{titlesec}
 \usepackage{lipsum}
+\usepackage{graphicx}
 \usepackage[dvipsnames]{xcolor}
+\usepackage{hyperref}
 
-\newcommand{\emptyPage}{\newpage\shipout\null}
-
+\newcommand{\emptypage}{\newpage\shipout\null}
+\newcommand{\autori}[1]{\textsc{\texttt{#1}}}
 \lstset
 {
 	basicstyle=\scriptsize\ttfamily,keywordstyle=\color{OliveGreen},
@@ -17,33 +20,155 @@
    	breaklines=true,tabsize=4, frame=single, rulecolor=\color{black}
 }
 
+\newenvironment{dedication}
+  {\clearpage           % we want a new page
+   \thispagestyle{empty}% no header and footer
+   \vspace*{\stretch{1}}% some space at the top 
+   \itshape             % the text is in italics
+   \raggedleft          % flush to the right margin
+  }
+  {\par % end the paragraph
+   \vspace{\stretch{3}} % space at bottom is three times that at the top
+   \clearpage           % finish off the page
+  }
+
 \begin{document}
 
+\begin{titlepage}
+High performance networking extensions for VirtualBox
+\end{titlepage}
+
+\emptypage
+
+\begin{dedication}
+Alla mia famiglia,\\
+a Erika,\\
+ai miei amici.
+\end{dedication}
+
+\begin{abstract}
+Virtual Machine systems are commonly used in several organizations providing network services, since those systems supply high reliability, security and availability. Therefore, network performance has become a critical issue to deal with, since Virtual Machine systems are widespread nowadays.
+\\
+\\
+In this thesis we are going to present VirtualBox~\cite{vbox} hypervisor, giving some details about its architecture and analyzing network performances of the existing solution. We then implement an extension that interfaces the hypervisor with netmap framework~\cite{netmap}, which provides fast packet I/O. Finally, we present some optimizations to an emulated network device (e1000 in our case), that considerably improve network performances.
+\end{abstract}
+\emptypage
 \tableofcontents
 
 \chapter{Introduction}
 
+It is important to point out that the term \textit{Virtual Machine} may have multiple interpretations, so we must first specify which one of those meanings we are referring to.
+
+When we talk about Virtual Machine (VM), we refer to a \textit{virtualized} computing environment running on top of a physical computing environment; as a result, we get one or more independent VMs, which may be different from the original one.\newline
+Before proceeding, we introduce some terminology:
+\begin{itemize}
+\item \textit{Guest}: The VM.
+\item \textit{Host}: The physical computing environment that \textit{hosts} one or more VMs.
+\item \textit{Virtual Machine Monitor (VMM)}: The software part that provides support for virtualization. Also known as \textit{Hypervisor}.
+\end{itemize}
+
+The main reason that caused the spread of VMs is the abstraction levels that it introduces; this brings many benefits:
+\begin{itemize}
+\item \textit{Flexibility}: you can run programs compiled for a given Instruction Set Architecture (ISA) and/or a given Operating System (OS) on top of a computer that has a different ISA and/or different OS (e.g. you can test new software on different architectures without \textbf{having} one machine per architecture).
+\item \textit{Protection}: each guest is \textbf{isolated}, which means that you can execute different applications on different VMs, so that if an application has a security issue, only the VM (or VMs) running that specific software will be exposed to it.
+\item \textit{Resources usage}: one single physical machine may provide multiple services using the 100\% of the resources, instead of using many underutilized physical machines, thus reducing costs and saving energy.
+\item \textit{Mobility}: replicating VMs to other locations is only a matter of copying/transmitting some files; this helps avoiding multiple setups since through a VM you can bring a functioning computing environment ready to use to the user.
+\end{itemize}
+
+As stated before, the term \textit{Virtual Machine} may have several meanings. A generic architecture of the "class" of VMs we will refer to (called \textit{Type 2 System Virtual Machines}), is shown in figure 1.1. In this case the VMM is a regular OS process, that runs in the host OS along with other processes. The VMM can access the physical resources through the OS services, which depend on the specific OS. We will not investigate other classes of Virtual Machines since this topic falls outside this work. 
+\begin{figure}[!h]
+	\centering
+	\includegraphics[scale=0.5]{img/vm_arch2.png}
+	\caption{Type 2 System Virtual Machine generic architecture}
+\end{figure}
+
+\section{Virtual Machine Implementation}
+The basic idea behind VMs, is to \textit{emulate}, i.e. to execute code written for a certain environment, using another environment. In the following, we will briefly present the three basic techniques to implement emulation: interpretation, dynamic translation, hardware-based virtualization.
+\subsection{Interpretation}
+This is the naive emulation technique. The VMM has to perform in software what a physical CPU would have done in hardware: so it will be implemented as a loop, for each iteration, performs  the fetch, decode and execute phases of instruction execution.
+\\
+\\
+Writing an interpreter for a modern ISA can be a very long and difficult process, even if it is conceptually simple; in fact, it is just a matter of reading an Instruction Set specification and implement all the possible instructions respecting the specifications.\\
+However, the simplicity of this approach is responsible for its inefficiency; as a matter of fact, for each source instruction, the VMM has to execute many host instructions (e.g. 30-100) to perform in software all the necessary operations. The average \textit{translation ratio} is very high (e.g. 40).
+\subsection{Dynamic translation}
+This is a more sophisticated form of emulation. Rather than performing a "source-code-to-source-code" translation, the idea is to translate it into an equivalent binary code that can be executed directly on the host CPU.\\
+This method amortizes the cost of interpretation, doing the fetch and decode phases only once or a few times. The code execution step of an instruction or a block of instructions is generated once (or a few times) and stored in a \textit{Code Cache}. After some time the code cache will contain the complete translation of the source program into the host ISA.\newline
+As a result, the average translation ratio can be close to 1, giving an acceptable performance.
+\\
+\\
+This technique is way more complicated than the previous one. In this case, several problems are present:
+\begin{itemize}
+\item \textit{code-discovery}: makes impossible to do static translation
+\item \textit{code-location}: different address space of the guest and host systems
+\item \textit{state mapping}: the way the VMM maps guest registers and the like to the host ones
+\end{itemize}
+
+It is interesting to notice that both interpretation and dynamic translation can make sense also in the case that guest and host have the same ISA; if this is the case, the translation is simplified since the code can be natively executed on the host machine, without performance losses.\\
+However there are some cases where emulation in software my be necessary. As a typical example, memory accesses to the I/O space may need software emulation. In particular, if the guest wants to access a physical resource that is present on the host (e.g. a network adapter), the VMM cannot allow direct access to the device, because other processes could be accessing the same device at the same time, and, obviously, the host network driver and the guest network driver are not aware of each other. On the other hand, if the guest wants to access a virtual device (which does not exist on the host), the I/O instruction must be \textit{trapped}\footnote{Guest execution is interrupted and the VMM takes control.} in order to emulate the device behavior in software.
+
+\subsection{Hardware-based virtualization}
+Due to the widespread use of VMs, extensions for virtualization were introduced by processor vendors. Thanks to these hardware assists, some of the problems affecting dynamic translation techniques have been overcome, and at the same time they have made it easier to execute guest code natively. Both AMD and Intel proposed their extensions for the x86 ISA, AMD-v (\cite{amd-v}) and VT-x (\cite{vt-x}) respectively.
+\\
+\\
+With this new extension, the CPU can execute in two different modes: \textit{root mode} and \textit{VM mode} (or \textit{non-root mode}). The CPU can switch from root mode to VM mode through a so called \textit{VM entry} instruction, while can switch back to root mode through a so called \textit{VM exit} instruction. When in VM mode, the CPU can execute guest code in a controlled environment, i.e. the CPU cannot execute some safety-critical instructions (e.g. I/O instructions); when necessary, CPU performs a VM exit and runs host code (VMM or other processes). The switch operation between host world and guest world is similar to a context switch, since it involves the saving of the host state and loading the guest state (and vice versa). Although performed in hardware, these transitions between host and guest worlds are expensive in terms of performance, because software overhead, OS operations and userspace/kernelspace transitions are involved in the switching operations, but they are also necessary when dealing with I/O operations or interrupts. Hence, VM switches must be minimized in order to achieve good I/O performances.
+\section{I/O Virtualization techniques}
+Emulating a device means doing in software what the device would do in hardware. Thus, when a guest accesses an I/O device (e.g. writes to a device register), the VMM must take over and emulate all the operations associated with the specific I/O access.
+\\
+\\
+In order to improve I/O virtualization techniques, three approaches have been defined:
+\begin{itemize}
+\item Hardware support in the devices (\textit{virtual functions} and IOMMU \cite{iommu}), so that a guest can directly access devices in a protected way and run at native speed.
+\item Runtime optimizations in VMM. E.g. running short code involving multiple I/O instructions in interpreted mode saves some VM exits\footnote{See \cite{vmm_opt} for details.}.
+\item Design \textit{virtual} device models in order to reduce expensive operations in device emulations (e.g. I/O accesses and interrupts). This approach is known as \textit{device paravirtualization} and produced some virtual device models, such as VirtIO (\cite{virtio}).
+This requires synchronization and memory sharing between the guest and VMM in order to exchange information, while interrupts are used only for notification purposes. In that way it is easier to minimize the amount of VM exits.
+\end{itemize}
 \chapter{VirtualBox}
-\section{VirtualBox features}
-Soluzioni di virtualizzazione: Software virt, HW virt.
-\section{VirtualBox architecture}
+In this chapter we will present VirtualBox hypervisor, giving details about its features (section~\ref{sec:features}), and its internal architecture (section~\ref{sec:architecture}). At the time of the writing, VirtualBox version number is 5.0.4, so we will refer to that version.
+\\
+As host OS, we used Ubuntu 15.10 64 bit with kernel version 4.2.0. The guest OS is generally the same as the host OS host, but some tests have been performed with FreeBSD as guest too. 
+
+
+\bigbreak
+
+\section{VirtualBox features} \label{sec:features}
+VirtualBox is a free, open source and cross-platform type 2 VMM, which means that it is able to run an arbitrary OS, regardless of the host OS, and it is implemented as a regular process in the host OS, therefore it can make use of all OS services.
+\section{VirtualBox architecture} \label{sec:architecture}
 TUTTO CAPITOLO 10 del manuale (componenti, moduli, etc)
 \subsection{Software virtualization}
 \subsection{Hardware virtualization}
-\subsection{EMT threads}
-\subsection{Device emulation and Network Transport Drivers}
-\subsubsection{Emulated devices}
-\paragraph{e1000}
-\paragraph{PCNet}
-\paragraph{VirtIO}
-\subsubsection{Networking architectures}
-\paragraph{NAT}
-\paragraph{Bridged networking}
-\paragraph{Internal networking}
-\paragraph{Host-only}
-\section{E1000 network adapters}
-\chapter{Optimization of emulated e1000 performance}
-\section{Current implementation on VirtualBox}
+\subsection{EMulation Threads (EMT)}
+\subsection{Networking modes}
+\subsection{Device emulation and Network Transport Drivers} \label{sec:net_ifs}
+\section{VirtualBox e1000 emulation}
+\subsection{TX emulation}
+\subsection{RX emulation}
+\chapter{Implementing netmap support}
+\section{Initialization}
+\section{Send side}
+\section{Receive side}
+\chapter{Optimizations on e1000 emulated device}
+\section{Analysis of current implementation}
+\subsection{TX performance}
+\subsection{RX performance}
+\section{Implementing mapping of descriptors}
+\subsection{Implementation}
+\subsection{Performance analysis}
+\section{Packet batching}
+\subsection{Implementation}
+\subsection{Modification of netmap implementation}
+\subsection{Performance analysis}
 \chapter{Conclusions}
+
+%\addcontentsline{toc}{section}{\refname}
+\begin{thebibliography}{30}
+\bibitem{vbox} VirtualBox project. \url{https://www.virtualbox.org}
+\bibitem{netmap} \autori{Rizzo L.} \textit{netmap: a novel framework for fast packet I/O} \url{http://info.iet.unipi.it/~luigi/papers/20120503-netmap-atc12.pdf}
+\bibitem{vale} \autori{Rizzo L., Lettieri G.} \textit{VALE: a switched ethernet for virtual machines.} \url{http://info.iet.unipi.it/~luigi/papers/20121026-vale.pdf}
+\bibitem{amd-v} \autori{AMD} \textit{Secure Virtual Machine Architecture Reference Manual.}
+\bibitem{vt-x} \autori{Neiger, Gil Santoni, A.} Intel virtualization technology: Hardware support for efficient processor virtualization. \textit{Intel Technology Journal 10, 3 (2006)}
+\bibitem{iommu} \autori{Yehuda, B.} Utilizing IOMMUs for virtualization in linux and xen.
+\bibitem{vmm_opt} \autori{Agensen, O., Mattson, J., Rugina, R., Sheldon, J.} Software techniques for avoiding hardware virtualization exits.
+\bibitem{virtio} \autori{Russel, R.} virtio: towards a de-facto standard for virtual I/O devices.
+\end{thebibliography}
 	
 \end{document}
