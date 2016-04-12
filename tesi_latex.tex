@@ -10,6 +10,7 @@
 \usepackage{graphicx}
 \usepackage[dvipsnames]{xcolor}
 \usepackage{hyperref}
+\usepackage{amsmath}
 
 \newcommand{\emptypage}{\newpage\shipout\null}
 \newcommand{\autori}[1]{\textsc{\texttt{#1}}}
@@ -34,7 +35,7 @@
  
 \renewcommand\labelitemii{--}
 
-\begin{document}
+\begin{document} \sloppy
 
 \begin{titlepage}
 High performance networking extensions for VirtualBox
@@ -129,9 +130,8 @@ In this chapter we will present VirtualBox hypervisor, giving details about its 
 \\
 As host OS, we used Ubuntu 15.10 64-bit with kernel version 4.2.0. The guest OS is generally the same as the host OS host, but some tests have been performed with FreeBSD as guest too.
 
-
 \section{VirtualBox features} \label{sec:features}
-VirtualBox is a free, open source and cross-platform type 2 VMM, so it is able to run an arbitrary OS, regardless of the host OS, and it is implemented as a regular process in the host OS, therefore it can make use of all OS services. At the time of the writing, VirtualBox version number is 5.0.4, so we will refer to that version for Linux OS (since our host OS is Linux based).
+VirtualBox is a free, open source hypervisor, written entirely in C/C++. In particular, it is a cross-platform type 2 VMM, so it is able to run an arbitrary OS, regardless of the host OS, and it is implemented as a regular process in the host OS, therefore it can make use of all OS services. At the time of the writing, VirtualBox version number is 5.0.4, so we will refer to that version for Linux OS (since our host OS is Linux based).
 \\
 \\
 Here is a brief outline of VirtualBox main features:
@@ -144,6 +144,13 @@ Here is a brief outline of VirtualBox main features:
 	\item \textit{Hyper-V}: Presents a Microsoft Hyper-V hypervisor interface which is recognized by Windows 7 and newer operating systems.
 	\end{itemize}
 We chose the KVM interface for tests and implementations.
+\item \textbf{Multiple frontends}: A \textit{frontend} is a user interface that VirtualBox provides, such as:
+	\begin{itemize}
+	\item \textit{VBoxManage}: A textual interface that allows advanced settings for VMs.
+	\item \textit{VirtualBox}: The default frontend, based on Qt~\cite{qt}.
+	\item \textit{VBoxSDL}: An alternative frontend based on SDL~\cite{sdl}. This is useful for business use as well as testing  during development. The VMs then have to be controlled with VBoxManage.
+	\item \textit{VBoxFB}: The "Framebuffer GUI", a GUI that sits directly on the Linux framebuffer. Not currently maintained.
+	\end{itemize}
 \item \textbf{No hardware virtualization required.} Even if hardware virtualization is fully supported, VirtualBox does not require the processor features such as Intel VT-x or AMD-V; in that way VirtualBox can be used also on old hardware which has not these features.
 \item \textbf{Guest Additions.} VirtualBox Guest Additions are software package which can be installed \textit{inside} of supported guest systems to provide additional integration and communication with the host system (e.g. accelerated 3D graphics, automatic adjustment of video resolution and more).
 \item \textbf{Great hardware support.} Among others, VirtualBox supports:
@@ -241,6 +248,7 @@ Let us assume that the EMT is running guest code, e.g. an application. At some p
 	 	\label{img:emt_flow}
 \end{figure}
 Figure~\ref{img:emt_flow} shows the situation described above.
+
 \subsection{Networking modes} \label{subsec:net_modes}
 For a VM it is fundamental to communicate to the outside world using the networking infrastructure, otherwise the VM becomes useless.
 \\
@@ -264,7 +272,8 @@ Even though technically, everything that can be done using internal networking c
 Instead, when host-only networking is used, VirtualBox creates a new software interface on the host (using \textit{vboxnetadp} kernel module) which then appears next to the existing network interfaces. In other words, whereas with bridged networking an existing physical interface is used to attach virtual machines to, with host-only networking a new "loopback" interface is created on the host. And whereas internal networking the traffic between the VMs cannot be seen, the traffic on the "loopback" interface on the host can be intercepted.
 \end{itemize}
 NAT mode is not interesting with respect to our goals, since it is only intended to be a way the VM can easily access the Internet, and it is not intended to be an efficient networking mode. Similarly, we will not consider bridged networking mode, because optimizing the performance of a real network adapter is not the aim of this work. Instead, we will consider the host-only mode, since our goal is to optimize the communication performances between two VMs on the same host, or between a VM and the host (so also internal networking is not interesting for us), using the netmap framework.
-\subsection{Network port and connector}
+
+\subsection{Network port and connector} \label{subsec:port_conn}
 In order to implement a specific networking architecture, VirtualBox implementation includes an interface between the code that emulates the network adapter, and the code that provides access to the chosen networking mode. The reason is that the two subsystems are completely independent, and a user can easily combine every virtual network adapter with every networking mode.
 \\
 VirtualBox defines the network device emulation \textit{network port} and the networking mode \textit{network connector}.
@@ -298,10 +307,250 @@ In this way, when a port wants to send a frame to the network, it invokes the \t
 On the other direction, when the connector gets a frame from the network, it invokes the \texttt{pfnWaitReceiveAvail} to whether the port is able to receive data. If this is the case, it immediately calls \texttt{pfnReceive} so that the port can push the received frame (passed as argument) to the guest.
 \\
 A simplified version of the above interaction is depicted in figure~\ref{img:port_conn_if}, where only the \textit{send} and \textit{receive} functions are shown.
+
+\section{The e1000 network adapter} \label{sec:e1000_adapter}
+In this section we will outline of the functioning of an e1000 device. We will describe only those aspects that are relevant to our goals, in particular we are interested to the NIC \textit{datapath}. The complete specifications can be found at~\cite{e1000}
+\\
+\\
+The datapath refers to the software interface that the OS uses in order to transmit and receive Ethernet frames. It involves just some registers and DMA-mapped memory.
+\\
+When the device driver wants to send an Ethernet frame through the adapter, it has to tell the adapter where the frame is stored in physical memory and how long it is. Once the device is aware of where the frame is stored, it can directly access the physical memory and send the frame on the wire. Similarly, when a frame arrives from the wire, the adapter has to store it in the physical memory. For this reason, it must know in advance where to store the frames, so the device driver must tell the adapter where it can store arrived frames. If it is not the case, the adapter will drop incoming frames.
+\\
+\\
+As we can see, in order to achieve this information exchange, there must be a well-defined interface between the device driver and the adapter. This interface is known as a \textit{ring}. A ring is a circular \textbf{array} (i.e. a countiguous zone in memory) of \textit{descriptors} that are used to exchange  those information. A network device has at least two rings: one for transmission (\textit{TX ring}) and the other for reception (\textit{RX ring}). A network adapter can have multiple TX/RX rings, possibly with different priorities and/or policies, so that it permits traffic engineering.
+\\
+However, VirtualBox implementation of e1000 device, offers only one ring per direction. The number of descriptors per ring (i.e. the length of the array), can be choosen by the device driver. In e1000 this number must be a power of 2 and less than or equal to 4096.
+
+\subsection{TX ring}
+The TX ring is an array containing \textit{N} TX descriptors. Each descriptor is 16 bytes long and contains the physical address of the associated buffer, its length (i.e. the length of the stored frame) and some status flags. Among the others, it contains the \textit{Descriptor Done} flag (DD) and the \textit{End of OPeration} flag (EOP). The DD flag is set by the adapter to tell the device driver that the TX descriptor has been successfully processed. The EOP flag is used by the device driver to tell the adapter whether that TX descriptor contains a complete packet or only a part of it (e.g. because it does not fit in the buffer); so if a packet is spread among \textit{N} TX descriptors, the first \textit{N-1} descriptors will have the EOP flag set to 0, and the last one will have the flag set to 1.
+\\
+\\
+Since the ring is stored in physical memory, the adapter must know its physical address. This information is stored in two registers: TDBAL (\textit{Transmit Descriptor Base Address Low}) and TDBAH (\textit{Transmit Descriptor Base Address High}). These are two 32-bit registers that, concatenated, form a 64-bit string of bits which is the physical base address of the ring.
+\\
+Since it is a producer/consumer system, a synchronization mechanism is required between the device driver and the adapter. This is achieved using two \textit{index registers}: the TDT register \textit{Transmit Descriptor Tail} and the TDH register \textit{Transmit Descriptor Head}. The value of these registers represent an \textit{array index} with respect to the TX ring.
+\\
+\\
+At the beginning, TDT and TDH are initialized to their initial value (0) by the device driver. When the driver wants to send a new frame, it writes the physical address and the length of the frame in the descriptor pointed by TDT register, then it increments the TDT register itself (modulo number-of-descriptors).
+\\
+When the adapter recognizes that TDH and TDT are different, it understands that there are new frames to be sent on the wire, so it start processing the descriptors starting from the one pointed by TDH.
+\\
+For each new descriptor to process, the device:
+\begin{enumerate}
+\item Sends the new frame on the wire.
+\item Writes the TX descriptor back in order to set the DD flag to 1.
+\item Increments the TDH register circularly. 
+\end{enumerate}
+
+So the adapter can access the next descriptor to be processed with this formula:
+$$Index = base + (TDH \times 16)$$
+Where \textit{base} is the concatenation of TDBAH and TDBAL registers.
+\\
+\\
+The \textbf{adapter} stop condition is \begin{math}TDH == TDT \end{math}, i.e. there are no more descriptors to process (TX ring empty).
+\\
+In order to prevent the index registers to wrap around, the device driver must never use the last free descriptor. So when the TDT is such that incrementing it circularly would cause \begin{math}TDH == TDT \end{math}, the driver must stop transmitting. This is the \textit{TX ring full} condition.
+\\
+Figure~\ref{img:tx_ring} shows the TX ring with its registers.
+\begin{figure}[!h] \label{img:tx_ring}
+	\centering
+	\includegraphics[scale=0.6]{img/tx_ring.png}
+	\caption{TX ring with its registers. Free descriptors are the grey ones, while the pending descriptors are the white ones. \textit{base} is the concatenation of TDBAH and TDBAL registers.}
+\end{figure}
+
+\subsection{RX ring}
+The RX ring is an array of \textit{N} RX descriptors. Each RX descriptor is 16 bytes long and contains the physical address of the associated buffer, its length and some status flags. Among the others, it contains the DD flag and the EOP flag (just like a TX descriptor). The DD flag is used by the adapter to notify the device driver that a the RX descriptor contains new data to be processed. The EOP flag is used by the adapter to tell the device driver whether that RX descriptor contains a complete packet or only a part of it. So if a packet is spread over \textit{N} RX descriptors, the first \textit{N-1} will descriptors will have the EOP flag set to 0, while the last one will have the flag set to 1.
+\\
+\\
+Just as for TX ring, the adapter must know the physical address of the RX ring. This address is stored in two registers: RDBAL (\textit{Receive Descriptor Base Address Low}) and RDBAH (\textit{Receive Descriptor Base Address High}). These are two 32-bit registers that, concatenated, form a 64-bit string of bits which is the physical base address of the RX ring.
+\\
+Here also, the synchronization between the adapter and the device driver is implemented through two index registers: RDT register (\textit{Receive Descriptor Tail}) and RDH (\textit{Receive Descriptor Head}).
+\\
+\\
+At the beginning, the driver initializes RDH and RDT to their initial values (0). The adapter still does not know the physical address of any buffer where it can store frames, so it cannot store incoming frames. Therefore, the driver writes the physical address of a memory buffer into the RX descriptor pointed by RDT, and increment RDT circularly\footnote{It is useless to write the length field in the descriptor, since it will be modified by the adapter on reception.}. Now the device know that a new memory buffer is available, so it use it to store incoming frames. When $RDH \neq RDT$, the adapter knows that there are buffers available, so it can accept incoming frames.
+\\
+When a new frame is arrived from the wire, the adapter:
+\begin{enumerate}
+\item Fetches the RX descriptor pointed by the RDH register.
+\item Copies the frame to the buffer pointed by the fetched RX descriptor.
+\item Writes back the descriptor in order to set the length of the received frame and the DD bit (\textit{writeback}).
+\item Increments RDH register circularly.
+\item \textit{May} send an interrupt in order to tell the driver that a new frame is available to be delivered to the network stack\footnote{See section~\ref{subsec:rx_emulation}.}.
+\end{enumerate}
+So the adapter can access the next available RX descriptor with this formula:
+$$Index = base + (RDH \times 16)$$
+where \textit{base} is the concatenation of RDBAH and RDBAL registers.
+\\
+\\
+The \textbf{adapter} stop condition is $RDH == RDT$, i.e. there is no available free descriptor where a frame can be stored.
+\\
+As for the TX ring, in order to prevent the array indexes to wrap around, the driver should never increment RDT if the increment would cause $RDT == RDH$. This is the full RX ring condition.
+\\
+Figure~\ref{img:rx_ring} shows the RX ring with its registers.
+\begin{figure}[!h] \label{img:rx_ring}
+	\centering
+	\includegraphics[scale=0.6]{img/rx_ring.png}
+	\caption{RX ring with its registers. Filled descriptors are the grey ones, while the available descriptors are the white ones. \textit{base} is the concatenation of RDBAH and RDBAL registers.}
+\end{figure}
+
+\subsection{e1000 interrupts} \label{subsec:e1000_interrutps}
+The e1000 network adapter can generate interrupts for several reasons, but we are only interested in two of them:
+\begin{itemize}
+\item \textit{TX interrupts}: these interrupts are raised when the transmission of one or more frames completed. Each TX descriptor has a bit flag \textit{Report Status} (RS), that, if set, tells the adapter to raise an interrupt as soon as the associated frame is transmitted. Anyway, an interrupt is always sent when the adapter reaches the stop condition ($TDT == TDH$).
+\\
+The interrupt handler frees the descriptors that have been processed (DD flag set), and mark them as free (unset the DD flag).
+\item \textit{RX interrupts}: these are raised whenever the adapter stores a new incoming frame in physical memory; in that way the device driver knows that a new frame has been received and it can be pushed to the kernel network stack.
+\end{itemize}
+When we are dealing with high packet rates, e.g. 1 Mpps, interrupt rate becomes a critical issue. In fact, interrupt routines have a fixed cost that must be paid before doing useful work, such as push the received frame to the network stack and let the receiver application to process it.
+\\
+At this rate, if each received packet raised a RX interrupt, the we would handle up to 1 million of interrupts per second, which would stall the machine. In that case, the CPU would spend almost all of its time in handling interrupts, and the receiver application could not do any useful work. This problem is known as the \textit{livelock} problem.
+\\
+\\
+This problem can be solved if the device "skips" some RX interrupts, raising an interrupt every batch of received frames, e.g. 100 frames per batch, and not every single frame. In that way, the interrupt rate is 100 lower and the interrupt overhead is amortized over 100 frames. Anyway, the device must guarantee that a RX interrupt is raised after a period of time, even if the 100-frames batch is not completed, because the device cannot know when the next frame will arrive.
+\\
+These mechanisms are known as \textit{interrupt mitigation}. 
+\\
+The e1000 network adapter implements two interrupt mitigation mechanism, but since the older one is strongly discouraged by the Intel manual, we will consider only the most recent one.
+\\
+\\
+The e1000 network adapter has a register, called \textit{Interrupt Throttling Register} (ITR), which controls the interrupt mitigation mechanism. If the driver sets this register to a value of $\delta$, the hardware ensures that $\delta$ is the minimum inter-interrupt interval, regardless of the interrupt type. In other words, whenever an event that requires an interrupt occurs, such as TX completion or RX completion, the device raises an interrupt as soon as possible, while meeting the ITR inter-interrupt delay constant.
 \section{VirtualBox e1000 emulation}  \label{sec:e1000_emu}
-The e1000\footnote{For detailed information about e1000 class of network adapters, refer to~\cite{e1000}} port is implemented in VirtualBox through three source files~\footnote{These source files are located in src/VBox/Devices/Network/ in the VirtualBox project root directory.}: \textit{DevE1000.cpp}, which is the one we are interested in, \textit{DevE1000Phy.cpp} and \textit{DevEEPROM.cpp}. The first one contains all the "emulation logic" part, while the others implement only the internal physical emulation and the internal EEPROM respectively. \subsection{TX emulation}
-\subsection{RX emulation}
-\chapter{Implementing netmap support}
+The e1000 port is implemented in VirtualBox through three source files \footnote{These source files are located in src/VBox/Devices/Network/ in the VirtualBox project root directory.}: \textit{DevE1000.cpp}, which is the one we are interested in, \textit{DevE1000Phy.cpp} and \textit{DevEEPROM.cpp}. The first one contains all the "emulation logic" part, while the others implement only the internal physical emulation and the internal EEPROM respectively.
+\\
+The code is an implementation of the interfaces provided by VirtualBox. Besides the callbacks discussed before (used for communication between port and connectors) there are other callbacks that provide an interface between ports and the rest of VirtualBox emulator: among the others, we have a  \textit{constructor} and a \textit{destructor}. The purpose of these functions is to initialize/uninitialize variables and structures used in the emulation, and to register/deregister the new PCI Ethernet device with the rest of the emulator. In this way, it is possible to have multiple instances of the e1000 network device when launching VirtualBox.
+\\
+Furthermore, the code contains (in the first part of the file), a set of \textit{options} , implemented as \texttt{define} statements, that can be enabled/disabled before compiling (e.g. enable usage of caches, ITR register, and so on).
+\\
+\\
+When registering a new PCI device, it is necessary to describe the I/O or MMIO regions that the device implements the device: this is done registering callback functions to to those regions, one for \textit{in} operations, on for \textit{out} operations.
+\\
+The e1000 emulation code registers a MMIO region and an I/O region, but the latter is not used. The MMIO region maps all the register the e1000 device implements.
+\\
+A statically defined mapping table is used to associate a couple of functions to each register, one for \textit{IN} operation, one for \textit{OUT} operation. In that way, one may associate a different read callback and a different write callback for each e1000 register. Is also possible to have the same callback function for multiple registers, or have no callbacks for some of them.
+\\
+In short, the emulation of a device is achieved with pre-registered callbacks.
+\\
+\\
+Now we will see in details how the register callbacks are invoked.
+\\
+When an EMT is executing guest code, e.g. the e1000 device driver, it may try to access a MMIO location corresponding to an e1000 register. The accessing instruction causes a VM exit, so the EMT switches from the guest context to the host context. At this point, the VirtualBox driver analyzes the VM exit reason and understand that the VM exit was caused by an MMIO access. In our case, the callback registered with the e1000 MMIO is invoked. This callback uses the address to get the index of the accessed register and calls the read (write) handler specific for that register.
+\\
+After the callback returns, a VM entry is executed and the EMT resumes executing guest code.
+\subsubsection{Event queues}
+A register callback is invoked by the EMT (section~\ref{subsec:EMT}) while it is handling the VM exit event. So we are in R0 context. That said, writing a register may cause some side effects, therefore these side effects should be emulated. However, since it may take an amount of time that is, possibly, much longer than a simple register update, and also because it is unnecessary to execute that code in kernelspace, it is reasonable to execute the "side-effect" code in userspace.
+\\
+In order to achieve this, VirtualBox provides the so called \textit{Event queues}. As the name suggests, these are queues in which an \textit{event} can be posted. Each queue has a callback function that is associated to the queue itself.
+\\
+Every time the EMT finishes handling a VM exit it checks all the event queues before executing a VM entry. If an event is found, the EMT removes that event from the queue and switches from R0 context to R3 context, so that it can start executing the callback associated to that queue. 
+\\
+When the callback returns, the EMT switches back to the kernelspace and continues scanning all event queues. Finally, when there are no more pending events, it executes a VM entry and resumes executing guest code.
+
+\subsection{TX emulation}
+The TX execution path is performed in by the EMT thread. As described in section ~\ref{sec:e1000_adapter}, when the device driver wants to notify the hardware that a new TX frame is ready to be processed, it writes to the TDT register. This causes a VM exit to occur, so the EMT passes from guest context to host context.
+\\
+Writing to the TDT register causes the adapter to transmit one or more frames, so the transmission handling must be done in userspace. So the write callback for the TDT register, aside from updating the register value, posts an event to an event queue (\textit{TxQueue}); in this way the EMT, before switching back to the guest world, executes the transmission of frames in userspace.
+\\
+The callback associated with the event queue simply calls the \texttt{e1kXmitPending} function. The way this function is implemented is regulated from the \texttt{E1K\_WITH\_TXD\_CACHE} define.
+\\
+\\ 
+When TX descriptors cache is disabled, the \texttt{e1kXmitPending} function:
+\begin{enumerate}
+\item \textit{Tries to acquire the lock} It calls the \texttt{pfnBeginXmit} function provided by the connector, where it \textbf{tries} to acquire the lock on the connector itself. This is a so called \textit{trylock} function, because if the lock is busy, the thread does not block waiting for the lock to be acquired. Instead, the function returns a \textit{busy} value. This is necessary because the thread trying to get the lock is the EMT, so it \textbf{must never} block, since it is in charge of emulating all the system.
+If the trylock succeeds, then go to the next step, otherwise the function returns without doing any transmission.
+\item \textit{Loads the current descriptor} If there are available descriptors ($TDT \neq TDH$), then it reads the TX descriptor pointed by TDH register from the guest physical memory.
+\item \textit{Allocates buffer} The port asks the \textit{connector} to allocate the buffer where it can store the frame, which is pointed by the loaded TX descriptor. The information about the length of the frame is contained in the TX descriptor itself.
+\item \textit{Writes back the descriptor} It writes the descriptor back into the guest physical memory, setting the DD bit to 1.
+\item \textit{Copies the frame} It reads the physical address pointed by the current descriptor (where the frame is stored) and copies it into the buffer provided by the connector.
+\item \textit{Possibly Transmits frame} If the packet is complete, i.e. EOP flag of TX descriptor is set to 1, then it calls the \texttt{pfnSendBuf} provided by the connector, passing the previously allocated buffer as an argument.
+\item \textit{Updates register} It circularly increments the TDH register.
+\item \textit{Possibly raises an interrupt} If at least one complete packet has been sent, it \textit{may} raise an interrupt to notify the guest that one or more frames have been sent (see section~\ref{subsec:e1000_interrutps}). If there are other descriptors available ($TDT \neq TDH$), then go back to step 2.
+\item \textit{Releases the lock} After all operations, it releases the lock acquired at step 1 calling the \texttt{pfnEndXmit} provided by the connector.
+\end{enumerate}
+We can see that for each available descriptor, the EMT must read the guest physical memory in order to get the current TX descriptor. This introduces an high overhead, particularly when the number of available descriptors is much higher than 1.
+\\
+\\
+The reading overhead can be amortized using a local TX descriptor cache. This can be done enabling the related option (\texttt{define E1K\_WITH\_TXD\_CACHE}).
+\\
+When the cache is enabled, the \texttt{e1kXmitPending} function behaves much like the same as before, except for the step 2. Previously, we had one TX descriptor per read. Now, instead, the EMT \textbf{tries} to load all the available TX descriptors in one single physical read (two reads in case the tail wrapped around the end of the TX descriptor ring). However, it may happen that only a fraction of the available descriptors is loaded, e.g. the cache is almost full. In that case, after the partial loading, the fetched descriptors are processed (like the previous case), the frames are sent and the cache is flushed, so that other available descriptors can be loaded.
+\\
+In that way, the cost of the readings is amortized over the number of fetched descriptors.
+
+\subsection{RX emulation} \label{subsec:rx_emulation}
+This time the RX execution path is not performed by the EMT, but it is performed by another thread. The reason is that the EMT is in charge of the entire emulation process, so it must never do blocking operations, so it cannot wait for incoming frames from the network.
+\\
+The thread in charge of receive frames is dependent on the used connector: in fact the frames flow from the network to the connector, and the latter sends them to the port (see section~\ref{subsec:port_conn}, figure~\ref{img:port_conn_if}).
+\\
+From now on, we will refer to this thread as \textit{recv thread}.
+\\
+\\
+When one or more frames from the network, the recv thread stores them in a buffer (that is dependent from the connector implementation). Then it first calls the port callback \texttt{pfnWaitReceiveAvail} to check if the port is able to receive at least one frame. If that callback returns successfully, the thread calls the \texttt{pfnReceive} callback, passing the buffer with the available data.
+\\
+\\
+The e1000 port implements the \texttt{pfnReceive} method with \texttt{e1kR3NetworkDown\_Receive} function, which takes the buffer and the size of the available data in the buffer as arguments.
+\\
+As in the TX case, the behavior (i.e. the implementation) is controlled by the \texttt{E1K\_WITH\_RXD\_CACHE} define.
+\\
+\\
+When RX descriptor cache is disabled, this function:
+\begin{enumerate}
+\item \textit{Filters the packet} It determines if the packet is to be delivered to the upper layer. The decision is based on:
+	\begin{itemize}
+	\item Length: if the packet length is greater than the maximum supported size (16384 bytes) or if long~\footnote{Packet greater than 1522 bytes.} packet reception is disabled~\footnote{For further information, see~\cite{e1000}.}, then drop the packet.
+	\item VLAN tag: if the filter does not find a match for the VLAN tag, then drop the packet.
+	\item Exact Unicast/Multicast: if the packet destination address exactly matches the address (either unicast or multicast address), then deliver the packet, otherwise drop it.
+	\item Promiscuous Unicast/Multicast: if the adapter is set in promiscuous mode~\footnote{The adapter accepts packets even if they are not addressed to it}, then deliver the packet, otherwise drop it.
+	\item Broadcast: if the packet destination address is broadcast, deliver it.
+	\end{itemize}
+\item \textit{Pads the packet} If the received packet is too short (less than 60 bytes), the packet is padded with zeroes.
+\item \textit{Loads the RX descriptor} If there is at least one available RX descriptor ($RDT \neq RDH$), then it loads the RX descriptor pointed by RDH register from the guest physical memory.
+\item \textit{Fills the buffer} After loading the RX descriptor, it writes the (possibly padded) packet into the buffer pointed by the loaded RX descriptor. If the packet does not fit the buffer, the EOP flag of the RX descriptor is set to 0, otherwise the flag is set to 1.
+\item \textit{Writes back the RX descriptor} After the RX descriptor has been filled with data, it sets the DD bit to 1 and writes back the RX descriptor in memory.
+\item \textit{Updates register} It circularly increments the RDH register.
+\item \textit{Possibly raises an interrupt} If at least one complete packet is successfully delivered, it \textit{may} raise an interrupt to notify the guest that one or more frames have been received (see section~\ref{subsec:e1000_interrutps}). If there is still data to be processed (e.g. a packet is not completely stored), go back to step 3.
+\end{enumerate}
+When the reception is completed (i.e. the \texttt{pfnReceive} function returns), the recv thread goes back to sleep waiting for new incoming packets.
+\\
+\\
+Just as in the TX case, we can see that for each available descriptor, the recv thread must read the guest physical memory to get the current RX descriptor. Therefore we have an high overhead, in particular when we are dealing with large incoming packets.
+\\
+\\
+This overhead can be amortized using a local RX descriptor cache, that can be enabled through the related option (\texttt{define E1K\_WITH\_RXD\_CACHE}). When the cache is enabled, the \texttt{e1kR3NetworkDown\_Receive} function behaves much like before, except for what concerns the loading of RX descriptors. In the previous case, we had one single RX descriptor per read. Now the recv thread, instead of loading the descriptor in memory, looks at the local cache: if the cache is empty, it \textit{prefetches} a number of RX descriptors, which is the minimum between the cache size and the number of available RX descriptors in memory, with a single memory read (two reads in case the tail wrapped around the end of the RX ring). If the cache is not empty, it uses the first available RX descriptor in cache.
+\\
+After the RX descriptor is processed and written back, the related position in cache is cleaned.
+\\
+\\
+It is important to point out that the physical \textbf{guest} memory is different from the physical \textbf{host} memory. Therefore, all the accesses to the guest physical memory (such as TX/RX descriptor loads) require an \textit{address translation}, that introduces additional overhead. The way it can be obviated will be described in section~\ref{subsec:memmap}.
+
+\chapter{Implementation of netmap support}
+In chapter 2 we described the VirtualBox architecture, its implementation and the interfaces it provides. In this chapter we will implement an extension to VirtualBox that provides fast packet I/O. This is achieved by interfacing VirtualBox with the netmap framework~\cite{netmap}.
+\\
+\\
+As described in section~\ref{subsec:port_conn}, VirtualBox includes two interfaces in order to implement the networking infrastructure: \textit{ports} and \textit{connectors}. Our goal is to create a new connector that implements the interfaces a VirtualBox port to a VALE switch~\cite{vale} provided by the netmap framework.
+\\
+Our netmap connector will be implemented through one single source file: \textit{DrvNetmap.cpp}\footnote{This source file will be located in src/VBox/Devices/Network/ in the VirtualBox project root directory. The \textit{Drv} prefix in the filename is due to the VirtualBox coding guidelines.}.
+
+\section{Integration with VirtualBox}
+Before going into details of our implementation, we must first "integrate" our work in VirtualBox system. It basically involves the VirtualBox build process, the user interface, so that a user can choose netmap as connector for his system, and the VMs configuration mechanism, in order to set/save/load the new configuration parameters needed by netmap.
+
+\subsection{Building VirtualBox}
+The VirtualBox build process is performed through two steps: the configuration and the compilation.
+
+\subsubsection{Configuration}
+Before starting the compilation process, we must run the script \textit{configure}\footnote{Located in the root directory of VirtualBox project.}, in order to check if the system meets the requirements, e.g. the presence of needed libraries, and to let the user to specify some custom options (e.g. the \texttt{--disable-docs} option prevents the compilation of documentation files). Therefore, we added the "\texttt{--with-netmap=}\textit{dir}" option to that script, so that the user can specify the absolute path~\footnote{It is requested the path to the subdirectory \textit{sys} of netmap source tree, e.g. \texttt{--with-netmap=/path/to/netmap/sys/}.} of netmap libraries in the system.
+\\
+The effect of the new option is to set an environment variable that the Makefile will check, so that it knows whether to include or not our \textit{DrvNetmap.cpp} source file in the compilation process, and the netmap headers in the list of directories to be searched for header files\footnote{\texttt{-I} option of GNU C compiler.}.
+
+\subsubsection{Compilation}
+As mentioned before, the Makefile will check a netmap-related environment variable that can be enabled through the configuration process. VirtualBox has one \textit{virtual} Makefile, that is actually splitted in many files (more than two hundreds). Those files are organized in a hierarchical manner: there is one Makefile for each level of the source tree. Therefore, the more we go deeper in the source tree, the more specific the present Makefile is for that subtree.
+\\
+Since our new file will be placed in the network devices directory, we will modify the devices-related Makefile, located in \textit{src/VBox/Devices/} directory.
+
+\subsection{The VirtualBox User Interface}
+As stated in section~\ref{sec:features}, VirtualBox offers multiple frontends as user interfaces. We need to extend those interfaces so that a user can choose netmap as connector.
+\\
+We focused on the \textit{VirtualBox} frontend (the default one), and \textit{VBoxManage} frontend, since \textit{VBoxSDL} only launches a VM, but the related configuration is done through VBoxManage.
+
+\subsubsection{VirtualBox frontend}
+This is the default frontend. It offers a user-friendly graphical user interface (GUI).
 \section{Initialization}
 \section{Send side}
 \section{Receive side}
@@ -309,7 +558,7 @@ The e1000\footnote{For detailed information about e1000 class of network adapter
 \section{Analysis of current implementation}
 \subsection{TX performance}
 \subsection{RX performance}
-\section{Implementing mapping of descriptors}
+\section{Implementing mapping of descriptors} \label{subsec:memmap}
 \subsection{Implementation}
 \subsection{Performance analysis}
 \section{Packet batching}
@@ -330,6 +579,8 @@ The e1000\footnote{For detailed information about e1000 class of network adapter
 \bibitem{virtio} \autori{Russel, R.} virtio: towards a de-facto standard for virtual I/O devices.
 \bibitem{rings} \autori{Intel} \textit{Intel 64 and IA-32 Architectures Software Developer's Manual}.
 \bibitem{e1000} \autori{Intel} \textit{PCI/PCI-X Family of Gigabit Ethernet Controllers Software Developers Manual.}
+\bibitem{sdl} SDL project. \url{http://www.libsdl.org/index.php}
+\bibitem{qt} Qt project. \url{http://www.qt.io/}
 \end{thebibliography}
 	
 \end{document}
