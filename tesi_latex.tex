@@ -11,6 +11,7 @@
 \usepackage[dvipsnames]{xcolor}
 \usepackage{hyperref}
 \usepackage{amsmath}
+\usepackage{frontespizio}
 
 \newcommand{\emptypage}{\newpage\shipout\null}
 \newcommand{\autori}[1]{\textsc{\texttt{#1}}}
@@ -35,11 +36,28 @@
  
 \renewcommand\labelitemii{--}
 
-\begin{document} \sloppy
-
-\begin{titlepage}
-High performance networking extensions for VirtualBox
-\end{titlepage}
+\begin{document} \sloppy \onehalfspacing
+%\begin{frontespizio}
+%	\begin{Preambolo*}
+%	\renewcommand{\fonttitlefont}{\fontsize{20}{22}\bfseries}
+%	\renewcommand{\frontinstitutionfont}{\fontsize{16}{17}\scshape}
+%	\renewcommand{\frontdivisionfont}{\fontsize{14}{17}\bfseries}
+%    	\renewcommand{\frontnamesfont}{\fontsize{14}{15}\bfseries}
+%    	\renewcommand{\frontfixednamesfont}{\fontsize{14}{15}\bfseries}
+%	\end{Preambolo*}
+%
+%\Istituzione{Università di Pisa}
+%\Dipartimento{Ingegneria dell'Informazione}
+%\Corso[Laurea Magistrale]{Computer Engineering}
+%\Logo{img/stemma.jpg}
+%\Titoletto{Tesi di Laurea Magistrale}
+%\Titolo{High performance networking extensions for VirtualBox}
+%\Sottotitolo{proca}
+%\Candidato[468020]{Luca Carotenuto}
+%\Relatore{Prof. Luigi Rizzo}
+%\Relatore{Prof. Giuseppe Lettieri}
+%\Annoaccademico{2015-2016}
+%\end{frontespizio}
 
 \emptypage
 
@@ -53,7 +71,7 @@ ai miei amici.
 Virtual Machine systems are commonly used in several organizations providing network services, since those systems supply high reliability, security and availability. Therefore, network performance has become a critical issue to deal with, since Virtual Machine systems are widespread nowadays.
 \\
 \\
-In this thesis we are going to present VirtualBox~\cite{vbox} hypervisor, giving some details about its architecture and analyzing network performances of the existing solution. We then implement an extension that interfaces the hypervisor with netmap framework~\cite{netmap}, which provides fast packet I/O. Finally, we present some optimizations to an emulated network device (e1000 in our case), that considerably improve network performances.
+In this thesis we are going to present VirtualBox hypervisor, giving some details about its architecture and analyzing network performances of the existing solution. We then implement an extension that interfaces the hypervisor with netmap framework~\cite{netmap}, which provides fast packet I/O. Finally, we present some optimizations to an emulated network device (e1000 in our case), that considerably improve network performances.
 \end{abstract}
 \emptypage
 \tableofcontents
@@ -166,6 +184,18 @@ We chose the KVM interface for tests and implementations.
 \end{itemize}
 \section{VirtualBox architecture} \label{sec:architecture}
 In this section we will present the internal architecture of VirtualBox, giving details about its implementation that is necessary to understand in order to implement our optimizations.
+
+\subsection{VirtualBox components} \label{subsec:components}
+When the VirtualBox Graphical User Interface (GUI) is opened and at least a VM is started, three processes are running:
+\begin{itemize}
+\item \textit{VBoxSVC} is the VirtualBox service that always runs in background. This process is started automatically by the first client process~\footnote{i.e. a frontend. See section \ref{subsec:vbox ui} for more informations.} and exits a short time after the last client exits. The service is responsible for maintaining the state of all VMs. It is also called \textit{server} process
+\item The GUI process. It communicates settings and state changes to \textit{VBoxSVC}. It is also called \textit{client} process
+\item The hypervisor process.
+\end{itemize}
+When we launch VirtualBox (e.g. the VirtualBox GUI), the VBoxSVC component starts executing and initializes all the registered VMs. Then, when a VM is launched, before it starts executing, the client asks the server all settings the details, so that it can deliver these information to the starting VMM process. Finally, the hypervisor is able to execute the VM.
+\\
+In section~\ref{subsec:vm_settings} we will see these steps in details.
+
 \subsection{VirtualBox kernel modules}
 VirtualBox provides different kernel modules that the user should add to the host kernel:
 \begin{itemize}
@@ -279,7 +309,7 @@ In order to implement a specific networking architecture, VirtualBox implementat
 VirtualBox defines the network device emulation \textit{network port} and the networking mode \textit{network connector}.
 \\
 \\
-Ports and connectors are two interfaces that communicate via a callback mechanism. Whatever implements a port interface, must have a reference (i.e. a pointer) to a connector, and vice versa.
+Ports and connectors are two interfaces that communicate via a callback mechanism. In any way a code implements a port interface, it must have a reference (i.e. a pointer) to a connector, and vice versa.
 \paragraph{Ports}
 The methods~\footnote{The "pfn" prefix stands for "pointer to function". It is imposed by VirtualBox coding guidelines.} exported by ports (which are exposed to connectors) are the following:
 \begin{itemize}
@@ -296,14 +326,15 @@ The methods exported by connectors (which are exposed to ports) are the followin
 \item \texttt{pfnFreeBuf} Frees an unused buffer that has been requested by the port.
 \item \texttt{pfnSendBuf} Sends data to the network. After the port filled the buffer (allocated by the connector) with data, it calls this function passing the filled buffer to the connector.
 \end{itemize}
-
+Moreover, both interfaces export two other (mandatory) methods: \texttt{pfnConstruct} (constructor) and \texttt{pfnDestruct} (destructor). The constructor is called when the VMM instantiates a port/connector, the destructor is called during the shutdown process.
+\\
+\\
 \begin{figure}[!ht]
 	\centering
 	 	\includegraphics[scale=.75]{img/port_conn_if.png}
 	 	\caption{Example of EMT execution flow}
 	 	\label{img:port_conn_if}
-\end{figure}
-In this way, when a port wants to send a frame to the network, it invokes the \texttt{pfnBeginXmit} function provided by the connector in order to gain lock access on the connector itself; then it calls \texttt{pfnAllocBuf} function to get a buffer where the port can store the frame and, finally, it invokes \texttt{pfnSendBuf} so that the connector can push the frame (passed as argument) to the network.
+\end{figure}In this way, when a port wants to send a frame to the network, it invokes the \texttt{pfnBeginXmit} function provided by the connector in order to gain lock access on the connector itself; then it calls \texttt{pfnAllocBuf} function to get a buffer where the port can store the frame and, finally, it invokes \texttt{pfnSendBuf} so that the connector can push the frame (passed as argument) to the network.
 On the other direction, when the connector gets a frame from the network, it invokes the \texttt{pfnWaitReceiveAvail} to whether the port is able to receive data. If this is the case, it immediately calls \texttt{pfnReceive} so that the port can push the received frame (passed as argument) to the guest.
 \\
 A simplified version of the above interaction is depicted in figure~\ref{img:port_conn_if}, where only the \textit{send} and \textit{receive} functions are shown.
@@ -351,10 +382,11 @@ The \textbf{adapter} stop condition is \begin{math}TDH == TDT \end{math}, i.e. t
 In order to prevent the index registers to wrap around, the device driver must never use the last free descriptor. So when the TDT is such that incrementing it circularly would cause \begin{math}TDH == TDT \end{math}, the driver must stop transmitting. This is the \textit{TX ring full} condition.
 \\
 Figure~\ref{img:tx_ring} shows the TX ring with its registers.
-\begin{figure}[!h] \label{img:tx_ring}
+\begin{figure}[!h] 
 	\centering
 	\includegraphics[scale=0.6]{img/tx_ring.png}
 	\caption{TX ring with its registers. Free descriptors are the grey ones, while the pending descriptors are the white ones. \textit{base} is the concatenation of TDBAH and TDBAL registers.}
+	\label{img:tx_ring}
 \end{figure}
 
 \subsection{RX ring}
@@ -386,10 +418,11 @@ The \textbf{adapter} stop condition is $RDH == RDT$, i.e. there is no available 
 As for the TX ring, in order to prevent the array indexes to wrap around, the driver should never increment RDT if the increment would cause $RDT == RDH$. This is the full RX ring condition.
 \\
 Figure~\ref{img:rx_ring} shows the RX ring with its registers.
-\begin{figure}[!h] \label{img:rx_ring}
+\begin{figure}[!h] 
 	\centering
 	\includegraphics[scale=0.6]{img/rx_ring.png}
 	\caption{RX ring with its registers. Filled descriptors are the grey ones, while the available descriptors are the white ones. \textit{base} is the concatenation of RDBAH and RDBAL registers.}
+	\label{img:rx_ring}
 \end{figure}
 
 \subsection{e1000 interrupts} \label{subsec:e1000_interrutps}
@@ -416,7 +449,7 @@ The e1000 network adapter has a register, called \textit{Interrupt Throttling Re
 \section{VirtualBox e1000 emulation}  \label{sec:e1000_emu}
 The e1000 port is implemented in VirtualBox through three source files \footnote{These source files are located in src/VBox/Devices/Network/ in the VirtualBox project root directory.}: \textit{DevE1000.cpp}, which is the one we are interested in, \textit{DevE1000Phy.cpp} and \textit{DevEEPROM.cpp}. The first one contains all the "emulation logic" part, while the others implement only the internal physical emulation and the internal EEPROM respectively.
 \\
-The code is an implementation of the interfaces provided by VirtualBox. Besides the callbacks discussed before (used for communication between port and connectors) there are other callbacks that provide an interface between ports and the rest of VirtualBox emulator: among the others, we have a  \textit{constructor} and a \textit{destructor}. The purpose of these functions is to initialize/uninitialize variables and structures used in the emulation, and to register/deregister the new PCI Ethernet device with the rest of the emulator. In this way, it is possible to have multiple instances of the e1000 network device when launching VirtualBox.
+The code is an implementation of the interfaces provided by VirtualBox. As mentioned in section~\ref{subsec:port_conn}, the first and last called method are the constructor (\texttt{pfnConstruct}) and the destructor (\texttt{pfnDestruct}) respectively. The main purpose of these functions is to register/deregister the new PCI Ethernet device with the rest of the emulator. In this way, it is possible to have multiple instances of the e1000 network device when launching VirtualBox.
 \\
 Furthermore, the code contains (in the first part of the file), a set of \textit{options} , implemented as \texttt{define} statements, that can be enabled/disabled before compiling (e.g. enable usage of caches, ITR register, and so on).
 \\
@@ -528,7 +561,7 @@ As described in section~\ref{subsec:port_conn}, VirtualBox includes two interfac
 \\
 Our netmap connector will be implemented through one single source file: \textit{DrvNetmap.cpp}\footnote{This source file will be located in src/VBox/Devices/Network/ in the VirtualBox project root directory. The \textit{Drv} prefix in the filename is due to the VirtualBox coding guidelines.}.
 
-\section{Integration with VirtualBox}
+\section{Integration with VirtualBox} \label{sec:integration}
 Before going into details of our implementation, we must first "integrate" our work in VirtualBox system. It basically involves the VirtualBox build process, the user interface, so that a user can choose netmap as connector for his system, and the VMs configuration mechanism, in order to set/save/load the new configuration parameters needed by netmap.
 
 \subsection{Building VirtualBox}
@@ -544,21 +577,220 @@ As mentioned before, the Makefile will check a netmap-related environment variab
 \\
 Since our new file will be placed in the network devices directory, we will modify the devices-related Makefile, located in \textit{src/VBox/Devices/} directory.
 
-\subsection{The VirtualBox User Interface}
+\subsection{The VirtualBox User Interface} \label{subsec:vbox ui}
 As stated in section~\ref{sec:features}, VirtualBox offers multiple frontends as user interfaces. We need to extend those interfaces so that a user can choose netmap as connector.
 \\
 We focused on the \textit{VirtualBox} frontend (the default one), and \textit{VBoxManage} frontend, since \textit{VBoxSDL} only launches a VM, but the related configuration is done through VBoxManage.
 
 \subsubsection{VirtualBox frontend}
-This is the default frontend. It offers a user-friendly graphical user interface (GUI). In figure~\ref{img:vbox_net_settings} 
-\begin{figure}[!h] \label{img:vbox_net_settings}
+This is the default frontend. It offers a user-friendly Graphical User Interface (GUI). The related source files are located in \textit{src/VBox/Frontends/VirtualBox/src}. Since we are interested in the networking part, we will focus on it.
+\\
+\begin{figure}[!ht] 
 	\centering
 	\includegraphics[width=\textwidth]{img/net_settings.png}
-	\caption{VBox net settings}
-\end{figure}
-\section{Initialization}
-\section{Send side}
-\section{Receive side}
+	\caption{Sample of VirtualBox network settings tab. In this case the adapter is an e1000 device, that is bridged to the host interface \textit{eth2}.}
+	\label{img:vbox_net_settings}
+\end{figure}As shown in figure~\ref{img:vbox_net_settings}, VirtualBox frontend allows to specify network settings for each VM independently and, for each VM, to specify up to 4 different network adapters. For each adapter, the following options are available:
+\begin{itemize}
+\item \textit{Enable flag} If checked, the network adapter is enabled in the Guest.
+\item \textit{Attached to} This drop down menu specifies the connector the adapter will be attached to. See section~\ref{subsec:net_modes}.
+\item \textit{Name} It is used in some networking modes. E.g. the bridged mode needs to know which physical interface will be bridged with the emulated interface.
+\item \textit{Adapter Type} Here we can select the preferred emulated adapter (such as an e1000 device).
+\item \textit{Promiscuous mode} It is used to set/unset the promiscuous mode on the adapter.
+\item \textit{MAC Address} The MAC address of the emulated interface.
+\item \textit{Cable Connected} If enabled, the adapter will be (virtually) connected to the connector.
+\item \textit{Port Forwarding} Only in NAT mode.
+\end{itemize}
+Our goal is to extend this interface so that a user can choose netmap as preferred connector. What we have to do is to include netmap in the "\textit{Attached to}" drop down menu, then add an additional text box where some netmap parameters can be specified by the user.
+\\
+To achieve this, we modified some source files that define this frontend. They are located in \textit{src/VBox/Frontends/VirtualBox/src/settings/machine}. In that way, we added netmap as an item of the drop down menu and we used the \textit{name} field as a textbox to specify to which netmap port the adapter will be attached to (e.g. a vale switch).\\\\\begin{figure}[t] 
+	\centering
+	\includegraphics[width=\textwidth]{img/netmap_settings.png}
+	\caption{The extended VirtualBox network settings interface. It uses the port 1 of the vale0 netmap virtual switch (vale0:1) and specifies 4 netmap rings per direction, having 1024 slots each.}
+	\label{img:netmap_settings}
+\end{figure}Moreover, we modified the \textit{UIMachineSettingsNetwork.ui} file; this file, which is used by Qt designer tool, describes all the GUI elements in XML (e.g. textboxes, flags, etc). Therefore, we added in the GUI a textbox where the user can specify some netmap parameters, such as the number of netmap rings and the related number of netmap slots~\footnote{For further information, refer to~\cite{netmap}.}.
+\\
+Figure \ref{img:netmap_settings} shows the result of our modifications.
+
+\subsubsection{VBoxManage frontend}
+VBoxManage is a Command Line Interface (CLI) that allows the user to completely control VirtualBox from the command line. VBoxManage supports all the features that the GUI gives the user access to, but it supports a lot more than that. VBoxManage must always be used with a specific \textit{subcommand}, such as \textit{createvm, modifyvm, controlvm} and others~\footnote{For a full list of available commands and their functions, refer to~\cite[chapter~8]{vbox}.}.
+\\
+The \textit{modifyvm} subcommand allows the user to specify many options for a specific VM, included the networking ones. So, what we have to do is to modify this command so that it supports netmap connector, netmap device name and netmap options. To achieve this we must modify the related source files in order to extend the command.
+\\
+\\
+The source files are located in \textit{src/VBox/Frontends/VBoxManage/} and there is a file for each subcommand. Therefore, since we are interested in the modifyvm command, we modified the \textit{VBoxManageModifyVM.cpp}.
+\\
+We extended the \texttt{--nic} option, which specifies the connector, so that it recognizes netmap as an argument. Then, we added two more options to the subcommand:
+\begin{itemize}
+\item \texttt{--nicnetmapdev} It specifies the netmap device the adapter will be attached to (just like the \textit{name} field in the GUI.
+\item \texttt{--nicnetmapoption} It specifies the netmap parameters (number of netmap rings and so on).
+\end{itemize}
+Furthermore, we modified the file \textit{VBoxManageHelp.cpp}, that is the implementation of the \texttt{help} command, so that the above netmap options and extensions are shown to the user.
+
+\subsection{VirtualBox VM settings} \label{subsec:vm_settings}
+In section~\ref{subsec:vbox ui} we discussed about how the user can interact with VirtualBox in order to tell it how to configure a VM. In the following, we will show how VirtualBox uses these information to actually configure a VM.
+
+\subsubsection{XML settings file}
+In VirtualBox, each VM has one directory where all files of that machine are stored; in particular, there is an XML file that describes the VM and all its settings.
+\\
+The settings file contains all those information that a user can specify for that specific VM, in particular the networking ones, using either the GUI frontend or the VBoxManage frontend. Therefore, when a user sets some options for a VM, e.g. specifies a certain connector, the information is stored in the related settings file.
+\\
+\\
+Since we modified the user interface so that it recognizes netmap, now we have to tell VirtualBox how to \textit{parse} the information coming from the UI.
+\\
+This is achieved by modifying the file \textit{/src/VBox/Main/xml/Settings.cpp}, that contains functions which manage the XML settings file. Here we extended the functions that read (write) the settings file so that they are able to return (store) the netmap-related information.
+
+\subsubsection{VirtualBox internal configuration}
+As mentioned in section~\ref{subsec:components}, when a VM is started, we have three processes: \textit{VBoxSVC} (the server), the frontend process (the client) and the VMM process (that runs the VM).
+\\
+The VBoxSVC code is splitted in several source files located in \textit{src/VBox/Main/src-server/} directory, due to its modularity, but the only components we are interested in are:
+\begin{itemize}
+\item \textit{VirtualBoxImpl.cpp} It is the main component, the "core" of the server process. It is able to communicate with all other components.
+\item \textit{MachineImpl.cpp} The \textit{Machine} component. It is an abstraction of a VM. It pares the XML settings file.
+\item \textit{NetworkAdapterImpl.cpp} The \textit{NetworkAdapter} component. It is the component that manages the networking settings.
+\end{itemize}
+The client code is also splitted in several source files located in \textit{src/VBox/Main/src-client/} directory, but the only part we are interested in is the \textit{ConsoleImpl2.cpp} one, since it initializes the VM components.
+\\
+\\
+From now on we will focus only on the handling of the networking settings, since it is the only relevant part for our purposes.
+\\
+\\
+When we launch VirtualBox (e.g. the GUI frontend), the server process starts executing and initializes all the registered VMs through an \textit{init} function. For each VM, that function, asks the machine component to load the (networking) settings for that specific VM from the related XML settings file. After reading the XML file, the machine component gives the NetworkAdapter component the settings information, so that it can store them in its internal structure.
+\\
+\\
+When we launch a VM, before the VM starts executing, the client asks the server process (VBoxSVC) all the (networking) settings details. The information request is then handled by the NetworkAdapter component, that returns the needed information.
+\\
+The client then: 
+\begin{enumerate}
+\item Discriminates which is the port/connector type using the information retrieved from the server.
+\item Initializes two configuration data structures that will contain all the networking details returned by the server.
+\item Delivers to the VMM the information about which port/connector has been chosen by the user and the related data structure. In that way the VMM knows which port/connector has to instantiate among all registered~\footnote{See section~\ref{subsec:registration}.} ones.
+\end{enumerate} 
+So, in the end, when the port and the connector will be instantiated by the VMM, i.e. the VMM will call the respective constructors, the related configuration data structures will be passed to the constructors as arguments.
+\\
+\\
+In order to integrate netmap-related options, we had to extend both server and client codes. In particular we modified the \textit{VirtualBoxImpl.cpp}, \textit{NetworkAdapterImpl.cpp} and \textit{ConsoleImpl2.cpp} source files.
+
+\paragraph{Server code} 
+In \textit{NetworkAdapterImpl.cpp} source file we added some statements used to get/set the new netmap options from/in the internal data structure (e.g. when the machine component initializes this network component). Moreover we added two new methods, a \textit{getter} and a \textit{setter}, that are exposed to the main component so that it can get/set the netmap options.
+\\
+In \textit{VirtualBoxImpl.cpp} source file we added the \textit{getter} method (which calls the new getter function in the NetworkAdapter component) that is exposed to the client so that it can retrieve the new netmap-related information.
+
+\paragraph{Client code} 
+In \textit{ConsoleImpl2.cpp} source file there is a code part that discriminates all the registered connector types. Therefore, we extended that part by adding a possible case in which a netmap connector has been specified. Our code gets the netmap settings\footnote{These settings are the netmap device name (e.g. vale0:1) and, possibly, the netmap options.} from the server, puts them in the configuration data structure and deliver these information to the VMM.
+
+\subsection{Connector registration} \label{subsec:registration}
+Compiling our new source file and configuring it through a frontend is not sufficient to make the VMM aware of the new connector. In fact, VirtualBox separates the \textbf{configuration} from the \textbf{registration} of a port/connector.
+\\
+\\
+In the initialization phase the VMM registers all connectors by calling the global function \texttt{VBoxDriverRegister} defined in \textit{VBoxDD.cpp} source file, located in \textit{src/VBox/Devices/build} directory. This, in turn, for each available connector in VirtualBox (not necessarily configured), calls the registration function that takes the pointer to the \textit{Driver Registration Record}.
+\\
+The driver registration record is a data structure containing some information about the connector itself that each connector has to statically allocate. These information are basically the name of the connector, the connector class (in our case is a network class connector) and a list of callbacks, such as the constructor and the destructor callbacks. Since a connector is identified by its name, it must be unique among all connectors. Furthermore, this registration record is useful to the VMM on startup. For these reasons, the structure must have a global scope.
+\\
+\\
+As explained in section~\ref{subsec:vm_settings}, during the startup of a VM, a client tells the VMM which connector has to instantiate and delivers it the related settings information.
+\\
+The VMM scans the list of registered connectors looking for a connector having a name that matches with the one given by the client. If a match is found, then the VMM instantiates the matching connector and calls the constructor using the pointer specified in its driver registration record.
+\\
+\\
+It is clear that if we do not register our new connector, the VMM will not be able to instantiate it and, therefore, our code will never be executed.
+\\
+In order to register our connector, we simply added a couple of lines of code in \textit{VBoxDD.cpp} source file, that call the register function passing the netmap driver registration record as argument. This registration record is contained in our new source file \textit{DrvNetmap.cpp}, which implementation will be described in the next section.
+
+\section{Connector implementation} \label{sec:implementation}
+In section~\ref{sec:integration} we discussed how we extended VirtualBox so that it is now "aware" of netmap. In the following, we will show our implementation of connector code.
+
+\subsection{Internal data structures} \label{subsec:structs}
+As we mentioned in section~\ref{subsec:registration} we need the driver registration record in order to register our new connector. The most relevant fields in the registration record are:
+\begin{itemize}
+\item Connector name, which identifies it among all other connectors. In our case is "Netmap"
+\item The class of the connector. It could be an audio connector, a block connector and so on. In our case it is a network connector.
+\item Pointer to the constructor function (\texttt{pfnConstruct}). It points to our constructor function, which name is \texttt{drvNetmapConstruct}.
+\item Pointer to the destructor function (\texttt{pfnDestruct}). It points to our destructor function, which name is \texttt{drvNetmapDestruct}.
+\end{itemize}
+Once our driver registration record is ready, we must instance the data structure that will implement (and extend) the network connector interface. The data structure contains:
+\begin{itemize}
+\item \texttt{INetworkUp} The connector interface data structure. This contains the pointers to the functions~\footnote{See section~\ref{subsec:port_conn}, paragraph \textbf{Connectors}.} that we will implement.
+\item \texttt{pIAboveNet} A pointer to the port interface we are attached to. With this, we can invoke the callbacks~\footnote{See section~\ref{subsec:port_conn}, paragraph \textbf{Ports}.} exposed to the port.
+\item \texttt{pDrvIns} The pointer to a structure used to retrieve the actual instance of the connector.
+\item \texttt{pszDeviceName} A string containing the name of the netmap device (e.g. vale0:1).
+\item \texttt{pNetmapDesc} The netmap descriptor data structure.
+\item \texttt{pTxSgBuf} A scatter/gather structure (S/G structure). This contains the buffer in which the port writes the frame it wants to transmit and some related information.
+\item \texttt{pIOThread} A pointer to the asynchronous I/O thread.
+\item \texttt{hPipeRead} The read end of a control pipe. It is read only by the asynchronous I/O thread.
+\item \texttt{hPipeWrite, hPipeRead} The write end of a control pipe. It is written by the EMT and by the VMM. 
+\item \texttt{XmitLock} The transmit lock that must be acquired by the port.
+%\item \texttt{fNoAvailableSpace} A flag used to check if there is enough space for transmission.
+\end{itemize}
+
+\subsection{Connector initialization} \label{subsec:netmap_init}
+Since the constructor is the first called function, this will be our starting point. The function that implements the \texttt{pfnConstruct} interface is called \texttt{drvNetmapConstruct}. Its purpose is to initialize our internal data structure (see section~\ref{subsec:structs}). It takes the pointer to the structure of the instance of the connector and the pointer to the configuration data structure.
+\\
+The basic steps this function performs are:
+\begin{enumerate}
+\item \textit{Initialization of the connector interface} For each callback exposed to the port, it assigns the related implementation.
+\item \textit{Parsing of the configuration} It parses the configuration parameters given by the user~\footnote{See section~\ref{subsec:vm_settings}.}. For example, if the netmap device name is missing (which is mandatory), then the constructor returns an error shutting down the VM. The same happens if a user specifies some parameters not supported by netmap.
+\item \textit{Opening of netmap descriptor} It calls the \texttt{nm\_open} function\footnote{Provided by the netmap user API.} using the user-specified parameters, if any, otherwise it uses the default ones. Opening a netmap descriptor involves the allocation of the netmap rings and, the netmap slots and, therefore, the buffer associated with each slot. Once that these buffer are allocated, their memory is never freed until the netmap descriptor is closed.
+\item \textit{Initialization of lock and pipe} It initializes the transmit lock structure and the control pipe.
+\item \textit{Thread creation} It instantiates the asynchronous thread, which has to handle the asynchronous I/O operations. The thread is instantiated with a function exposed by the VMM. In that way, the VMM takes care of suspending, resuming and destroying the thread as the VM state changes. In particular, this function takes two functions as arguments: the body of the thread, and the wakeup callback. This is called on the VMM on a VM state change~\footnote{See section~\ref{subsec:netmap_recv}.}. 
+\end{enumerate}
+When the VM is shutdown, the VMM destroys all the connectors instances by calling the destructor (\texttt{pfnDestroy}) function on each connector. Our implementation is a function called \texttt{drvNetmapDestruct}, and it performs almost all the operations done by the constructor backwards. In particular, it closes the pipe, deletes the lock and closes the netmap descriptor.
+\\
+The asynchronous thread destruction is performed internally by the VMM.
+\subsection{Send side} \label{subsec:netmap_send}
+In this section we explain the implementation of the operations related to the send side. In the following we will show, step by step, what happens on the connector side when a port wants to send a frame~\footnote{This implementation is not e1000 dependent, since it must work with any port.}.
+\begin{enumerate}
+\item \texttt{drvNetmapNetworkUp\_BeginXmit} Implements: \texttt{pfnBeginXmit}. When a port wants to transmit, the first thing it has to do is to acquire the lock on the connector. This function performs a trylock operation~\footnote{The transmitting thread is the EMT, so it must never block.} on the connector internal lock (\texttt{XmitLock}). If this operation is successful, the thread has exclusive access to the connector, so that there cannot be races.
+\item \texttt{drvNetmapNetworkUp\_AllocBuf} Implements: \texttt{pfnAllocBuf}. After the lock acquisition, the port asks the connector to allocate the data structure, the S/G buffer structure, where it will store the packet. Since we are using netmap, the buffers associated with the netmap slots are allocated on the initialization phase (constructor), so there is no need to dynamically allocate/free memory. Therefore, we keep a statically allocated S/G structure (\texttt{pTxSgBuf}) which parameters will be configured on each \texttt{pfnAllocBuf} call. In particular, the buffer pointer in \texttt{pTxSgBuf} will point to the available netmap slot buffer. The function returns a pointer to \texttt{pTxSgBuf}. This allows to save the overhead caused by memory allocation/deallocation.
+\\
+However, it may happen that the netmap TX rings are full, so there is no space available for transmission. If this is the case, we try to flush  any potential pending slots by calling a \textit{TX\_SYNC} on the netmap File Descriptor (FD) through the \texttt{ioctl} system call. If this has no effect~\footnote{E.g. we are transmitting on a netmap pipe and there is no one reading on the other end.}, we %set the \texttt{fNoAvailableSpace} flag, 
+write one byte with value \texttt{1} on the write end of the control pipe (the effects will be explained in~\ref{subsec:netmap_recv}) and return.
+\item \texttt{drvNetmapNetworkUp\_FreeBuf} Implements: \texttt{pfnFreeBuf}. This is called by the port when it wants to free the previously allocated buffer~\footnote{E.g. at the end of transmission, or if an error occurred during some phase.}. In our case, since the buffer points to the netmap slot buffer, this function will simply reset the fields of \texttt{pTxSgBuf} instead of actually freeing the memory.
+\item \texttt{drvNetmapNetworkUp\_SendBuf} Implements: \texttt{pfnSendBuf}. After the port has successfully filled the buffer, it calls this callback on the connector. This function increments the indexes of the netmap ring and performs a \textit{TX\_SYNC} on the netmap FD.
+\item \texttt{drvNetmapNetworkUp\_EndXmit} Implements: \texttt{pfnEndXmit}. This simply releases the transmit lock on the connector.
+\end{enumerate}
+There are two additional callback functions: \texttt{pfnSetPromiscuousMode} and \texttt{pfnNotifyLinkChanged}. These two functions are not useful for our purposes, but since it is mandatory that a connector implements all the exported methods, we just implemented these two callbacks with two stub functions.
+
+\subsection{Receive side} \label{subsec:netmap_recv}
+In this section we will explain the implementation of the operations related to the receive side. In the following we will show, step by step, what happens on the connector side when a frame is received from the "outside world"~\footnote{This implementation is not e1000 dependent, since it has to work with any port}.
+\\
+\\
+In section~\ref{subsec:netmap_init} we stated that the constructor initializes the thread that will handle the asynchronous I/O operations. We called this thread \textit{NETMAP thread}. Mostly, the thread is in charge of handling the incoming frames.
+\\
+\\
+The reception must be necessarily handled by a dedicated thread, and not the EMT, because it has to \textbf{wait} for incoming packets. In our case, the thread must do a \texttt{poll} system call on the netmap FD~\footnote{For further information refer to~\cite{netmap}.}, which is a blocking operation.
+\\
+The NETMAP thread body is implemented by \texttt{drvNetmapAsynchIOThread} function, while its wakeup callback is implemented by \texttt{drvNetmapAsynchIOWakeup}. The wakeup callback writes one byte with value \texttt{0} to the write end of the pipe (\texttt{hPipeWrite}) and returns. The body of the thread, instead, performs two different phases: the initialization and the loop.
+\\
+As a first step, the thread initializes the polling data structures that contain a reference to the FDs to be monitored by the \texttt{poll} system call. These FDs are two: the netmap FD and the FD of the read end of the control pipe (\texttt{hPipeRead}), both waiting for a POLLIN event.
+\\
+\\
+After the initialization, the function goes in a loop, that iterates until the VM is in \textit{RUNNING} state, that performs the following operations:
+\begin{enumerate}
+\item \textbf{Reset of polling data structures}. On the first iteration this has no effect, since those structures have just been initialized. From the second iteration on, since the \texttt{poll} modifies the \texttt{revents} field of these structures, they must be reinitialized~\footnote{See the \texttt{poll} man page for details.}.
+\item \textbf{Wait for a POLLIN event}. It calls the \textit{poll} system call, so that the NETMAP thread blocks until a POLLIN event occurs on one of the FD specified in the initialization phase, or an internal error occurs.
+\item \textbf{Wake up}. The thread wakes up. This may happen for several reasons, so it must handle all the possible situations:
+	\begin{itemize}
+	\item \textit{POLLIN on netmap FD}. I%t means that one or more frames are ready to be read from the netmap RX ring. %it checks the \texttt{fAvailableSpace} flag. If it is set, it calls the \texttt{pfnXmitPending} on the port.
+	Therefore, it will wait for the port to be ready to receive data by calling the \texttt{pfnWaitReceiveAvail} callback on the port itself, passing the \texttt{RT\_INDEFINITE\_WAIT} value as argument; this will cause the thread to block until the port is ready to receive. Of course, if it is not the case, the callback will return immediately.
+\\
+When the port is ready, the thread starts a loop in which:
+		\begin{enumerate}
+		\item Fetches the first available frame, if any. Otherwise it exits the loop.
+		\item Checks if the port is able to receive it through the \texttt{pfnWaitReceiveAvail} callback. This time, we pass a \texttt{0} value as argument, so that if the port cannot receive, the function immediately returns with a negative value. If this is the case, the thread exits the loop.
+		\item Pushes it to the port through the \texttt{pfnReceive} callback.
+		\item Goes back to step (a).
+		\end{enumerate}
+	\item \textit{POLLIN on control pipe}. It means that the EMT wrote a value in the pipe. If the value is 0, it means that the EMT executed the wakeup callback due to a state change of the VM, e.g. passed from the \textit{RUNNING} state to \textit{SUSPENDING} state. In that case, the thread reiterates the loop, thus it tests the loop condition (VM in \textit{RUNNING} state). The condition will fail this time, since the VM, following the example, is in \textit{SUSPENDED} state. Therefore, the thread it will exit the loop.
+	\\
+	If the read value is 1, it means that the EMT was trying to transmit a frame, but it found all netmap TX rings full (see section~\ref{subsec:netmap_send}). Therefore, the thread, besides waiting for a POLLIN event on the netmap FD, it also waits for a POLLOUT event on the same FD and goes back to step 1. In that way, the NETMAP thread will be awaken even when there is at least one available netmap TX slot.
+	\item \textit{POLLOUT on netmap FD}. It means that at least one netmap TX slot is available for transmission. Therefore, we have to disable POLLOUT event on the netmap FD, and we must notify the port so that it can transmit its pending packets. So we call the \texttt{pfnXmitPending} callback of the port and go back to step 1. Notice that this time the NETMAP thread is doing the transmission path.
+	\item \textit{Polling failure}. An error during the \texttt{poll} system call occurred. This should never happen, but if does, the thread relinquish the CPU and, whenever it is scheduled, goes back to step 1. 
+	\end{itemize}
+\item \textbf{End of loop}. Only happens if the VM is not in \textit{RUNNING} state anymore. In that case the thread function returns.
+\\
+As already mentioned, the VMM will take care of re-initializing the thread when the VM will switch back to \textit{RUNNING} state.
+\end{enumerate}
 \chapter{Optimizations on e1000 emulated device}
 \section{Analysis of current implementation}
 \subsection{TX performance}
@@ -566,7 +798,7 @@ This is the default frontend. It offers a user-friendly graphical user interface
 \section{Implementing mapping of descriptors} \label{subsec:memmap}
 \subsection{Implementation}
 \subsection{Performance analysis}
-\section{Packet batching}
+\section{Packet batching} \label{sec:packet_batching}
 \subsection{Implementation}
 \subsection{Modification of netmap implementation}
 \subsection{Performance analysis}
@@ -574,7 +806,7 @@ This is the default frontend. It offers a user-friendly graphical user interface
 
 %\addcontentsline{toc}{section}{\refname}
 \begin{thebibliography}{30}
-\bibitem{vbox} VirtualBox project. \url{https://www.virtualbox.org}
+\bibitem{vbox} VirtualBox user manual. \url{https://www.virtualbox.org/manual/}
 \bibitem{netmap} \autori{Rizzo L.} \textit{netmap: a novel framework for fast packet I/O} \url{http://info.iet.unipi.it/~luigi/papers/20120503-netmap-atc12.pdf}
 \bibitem{vale} \autori{Rizzo L., Lettieri G.} \textit{VALE: a switched ethernet for virtual machines.} \url{http://info.iet.unipi.it/~luigi/papers/20121026-vale.pdf}
 \bibitem{amd-v} \autori{AMD} \textit{Secure Virtual Machine Architecture Reference Manual.}
