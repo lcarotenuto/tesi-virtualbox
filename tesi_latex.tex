@@ -11,7 +11,9 @@
 \usepackage[dvipsnames]{xcolor}
 \usepackage{hyperref}
 \usepackage{amsmath}
-\usepackage{frontespizio}
+\usepackage{pdfpages}
+\usepackage{booktabs}
+\usepackage{tabularx}
 
 \newcommand{\emptypage}{\newpage\shipout\null}
 \newcommand{\autori}[1]{\textsc{\texttt{#1}}}
@@ -58,7 +60,7 @@
 %\Relatore{Prof. Giuseppe Lettieri}
 %\Annoaccademico{2015-2016}
 %\end{frontespizio}
-
+\includepdf{frontespizio.pdf}
 \emptypage
 
 \begin{dedication}
@@ -196,7 +198,7 @@ When we launch VirtualBox (e.g. the VirtualBox GUI), the VBoxSVC component start
 \\
 In section~\ref{subsec:vm_settings} we will see these steps in details.
 
-\subsection{VirtualBox kernel modules}
+\subsection{VirtualBox kernel modules} \label{subsec:kern_modules}
 VirtualBox provides different kernel modules that the user should add to the host kernel:
 \begin{itemize}
 \item \textit{vboxdrv}: The only mandatory module. This is needed by the VMM to gain control over the host system. It is used to manage the host/guest world switches and device emulations.
@@ -792,9 +794,62 @@ When the port is ready, the thread starts a loop in which:
 As already mentioned, the VMM will take care of re-initializing the thread when the VM will switch back to \textit{RUNNING} state.
 \end{enumerate}
 \chapter{Optimizations on e1000 emulated device}
+In chapter 3 we described how we extended VirtualBox so that it can make use of netmap framework. In this chapter we will discuss about the problems and bottlenecks related to the current implementation, analyzing the performances and, finally, we will propose some optimizations so that we can significantly improve performances. 
+\\
+\\
+Before continuing, we must point out the scenarios we are going to analyze.
+\\
+We consider two VMs, we will call them \textit{Guest 1} (G1) and \textit{Guest 2} (G2). The VMs are connected through a virtual switch so that they can communicate with each other. G1 will run an application that sends UDP packets of a given size at a given rate, while G2 will run another application that receives all the UDP packets it can. Both VMs will use an e1000 device as virtual network card. This situation is shown in figure~\ref{img:g2g_comm} 
+\\
+The two scenarios differ in the switch: in the first case it will be the virtual switch provided by \textit{VBoxNetAdp} kernel module (section~\ref{subsec:kern_modules}) called \textit{vboxnet0}. So we use the host-only networking mode (see section~\ref{subsec:net_modes}). In the second case the switch will be a VALE switch, in particular G1 will be connected to the first port of the VALE switch (\textit{vale0:1}) and G2 will be connected to the second port of the same switch (\textit{vale0:2}).
+\\
+\\
+The first scenario will be our reference for performance analysis. It is the starting point. Our aim is to maximize the packet rate of the applications running on both VMs in the second scenario; in other words, we want to maximize the transmit rate and the receive rate on a \textit{Guest to Guest} (G2G) communication.
+\\
+\\
+Since both VMs run the same OS (Ubuntu 15.10), we can swap the roles of G1 and G2 without any issue.
+\begin{figure}[!ht]
+	\centering
+	\includegraphics[scale=0.5]{img/g2g_comm.png}
+	\caption{An UDP sender running on G1 sends packets to an UDP receiver running on G2. The VMs can communicate with each other through a virtual switch.}
+	\label{img:g2g_comm}
+\end{figure}
 \section{Analysis of current implementation}
-\subsection{TX performance}
-\subsection{RX performance}
+Now we are going to discuss about the performances of the current implementation of the existing solutions (see section~\ref{sec:e1000_emu}) using the host-only networking mode and the new netmap networking mode.
+\\
+\\
+As already mentioned, in our experiments we will consider a VM (G1) running an UDP sender that sends UDP packets to an UDP receiver located on a second VM (G2). The sender is just an infinite loop where each iteration invokes the \texttt{send} system call. The buffer passed to the system call is always the same and its length is 60 bytes, i.e. the minimum size of a Ethernet frame.
+%\begin{figure}[!h]
+%	\centering
+%	\includegraphics[scale=0.5]{img/G2G_netmap.png}
+%	\caption{Type 2 System Virtual Machine generic architecture}
+%	\label{img:g2g_netmap}
+%\end{figure}
+\subsection{Using host-only networking mode}
+We first analyze the case where the VMs are connected with each other using the host-only networking mode, in particular using the \textit{vboxnet0} virtual switch provided by VirtualBox.
+\subsubsection{TX performance}
+We will analyze the performance on the transmitter side. The measurements are shown in table~\ref{tab:vboxnet_tx}
+
+
+\begin{table}[tp]
+\caption{prova}
+\label{tab:vboxnet_tx}
+\label{prima_tabella}
+\centering
+\begin{tabular*}{\textwidth}[tb]{>{\bfseries}l@{\extracolsep{\fill}}p{6cm}}
+\toprule
+prova	& Force is a vector quantity defined as the rate of change of the momentum of the body that would be induced by that force acting alone \\\midrule
+Moment of a force & Moment of a force with respect to an origin is defined as the cross product of the position vector ( with respect to the same origin ) and the force .\\\bottomrule
+\end{tabular*}
+\end{table}
+
+\subsubsection{RX performance}
+
+\subsection{Using netmap networking mode}
+
+\subsubsection{TX performance}
+
+\subsubsection{RX performance}
 \section{Implementing mapping of descriptors} \label{subsec:memmap}
 \subsection{Implementation}
 \subsection{Performance analysis}
@@ -806,8 +861,9 @@ As already mentioned, the VMM will take care of re-initializing the thread when 
 
 %\addcontentsline{toc}{section}{\refname}
 \begin{thebibliography}{30}
+\bibitem{netmap} \autori{Rizzo L.} \textit{netmap: a novel framework for fast packet I/O}
 \bibitem{vbox} VirtualBox user manual. \url{https://www.virtualbox.org/manual/}
-\bibitem{netmap} \autori{Rizzo L.} \textit{netmap: a novel framework for fast packet I/O} \url{http://info.iet.unipi.it/~luigi/papers/20120503-netmap-atc12.pdf}
+ \url{http://info.iet.unipi.it/~luigi/papers/20120503-netmap-atc12.pdf}
 \bibitem{vale} \autori{Rizzo L., Lettieri G.} \textit{VALE: a switched ethernet for virtual machines.} \url{http://info.iet.unipi.it/~luigi/papers/20121026-vale.pdf}
 \bibitem{amd-v} \autori{AMD} \textit{Secure Virtual Machine Architecture Reference Manual.}
 \bibitem{vt-x} \autori{Neiger, Gil Santoni, A.} Intel virtualization technology: Hardware support for efficient processor virtualization. \textit{Intel Technology Journal 10, 3 (2006)}
