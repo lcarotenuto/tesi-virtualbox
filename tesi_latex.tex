@@ -13,7 +13,7 @@
 \usepackage{amsmath}
 \usepackage{pdfpages}
 \usepackage{booktabs}
-\usepackage{tabularx}
+\usepackage{tabu}
 
 \newcommand{\emptypage}{\newpage\shipout\null}
 \newcommand{\autori}[1]{\textsc{\texttt{#1}}}
@@ -37,6 +37,7 @@
   }
  
 \renewcommand\labelitemii{--}
+\renewcommand{\arraystretch}{1.5}
 
 \begin{document} \sloppy \onehalfspacing
 %\begin{frontespizio}
@@ -794,20 +795,21 @@ When the port is ready, the thread starts a loop in which:
 As already mentioned, the VMM will take care of re-initializing the thread when the VM will switch back to \textit{RUNNING} state.
 \end{enumerate}
 \chapter{Optimizations on e1000 emulated device}
-In chapter 3 we described how we extended VirtualBox so that it can make use of netmap framework. In this chapter we will discuss about the problems and bottlenecks related to the current implementation, analyzing the performances and, finally, we will propose some optimizations so that we can significantly improve performances. 
+In chapter 3 we described how we extended VirtualBox so that it can make use of netmap framework. In this chapter we will discuss about the problems and bottlenecks related to the current implementation, analyzing the performance. We will prove that our netmap extension is strictly necessary to achieve much better packet rates and, finally, we will propose some optimizations so that we can improve performances even further. 
 \\
 \\
-Before continuing, we must point out the scenarios we are going to analyze.
+We consider two VMs, we will call them \textit{Guest 1} (G1) and \textit{Guest 2} (G2). The VMs are connected through a virtual switch so that they can communicate with each other. Since we want the maximum achievable performance, we installed netmap on both VMs, so that they can use the tools provided by the netmap framework to send/receive traffic.
 \\
-We consider two VMs, we will call them \textit{Guest 1} (G1) and \textit{Guest 2} (G2). The VMs are connected through a virtual switch so that they can communicate with each other. G1 will run an application that sends UDP packets of a given size at a given rate, while G2 will run another application that receives all the UDP packets it can. Both VMs will use an e1000 device as virtual network card. This situation is shown in figure~\ref{img:g2g_comm} 
-\\
-The two scenarios differ in the switch: in the first case it will be the virtual switch provided by \textit{VBoxNetAdp} kernel module (section~\ref{subsec:kern_modules}) called \textit{vboxnet0}. So we use the host-only networking mode (see section~\ref{subsec:net_modes}). In the second case the switch will be a VALE switch, in particular G1 will be connected to the first port of the VALE switch (\textit{vale0:1}) and G2 will be connected to the second port of the same switch (\textit{vale0:2}).
+In particular, guests run \textit{pkt-gen}: a UDP traffic generator that makes use of the netmap framework to speed-up the packet I/O. The application can be run in sender mode and receiver mode. In sender mode, the VM sends UDP packets of a given size at a given rate, while in receiver mode the VM receives all UDP packets.
 \\
 \\
-The first scenario will be our reference for performance analysis. It is the starting point. Our aim is to maximize the packet rate of the applications running on both VMs in the second scenario; in other words, we want to maximize the transmit rate and the receive rate on a \textit{Guest to Guest} (G2G) communication.
+In our case G1 will act as a sender and G2 as a receiver~\footnote{Since both VMs run the same OS (Ubuntu 15.10), we can swap the roles of G1 and G2 without any issue.}. Both guests will use an e1000 device as a virtual network card. This situation is shown in figure~\ref{img:g2g_comm}.
+\\
+Starting from this situation, we will analyze two scenarios: in the first case the VMs will be attached to the virtual switch provided by \textit{VBoxNetAdp} kernel module (section~\ref{subsec:kern_modules}) called \textit{vboxnet0}. So we will use the host-only networking mode (see section~\ref{subsec:net_modes}). In the second case the hosts will be attached to a VALE switch, in particular G1 will be connected to the first port (\textit{vale0:1}) and G2 will be connected to the second port of the switch (\textit{vale0:2}).
 \\
 \\
-Since both VMs run the same OS (Ubuntu 15.10), we can swap the roles of G1 and G2 without any issue.
+The first scenario will be our reference for performance analysis. In this way we will prove that the second scenario is the most efficient in terms of packet rate.
+
 \begin{figure}[!ht]
 	\centering
 	\includegraphics[scale=0.5]{img/g2g_comm.png}
@@ -815,10 +817,10 @@ Since both VMs run the same OS (Ubuntu 15.10), we can swap the roles of G1 and G
 	\label{img:g2g_comm}
 \end{figure}
 \section{Analysis of current implementation}
-Now we are going to discuss about the performances of the current implementation of the existing solutions (see section~\ref{sec:e1000_emu}) using the host-only networking mode and the new netmap networking mode.
+Now we are going to discuss about the performance of the current implementation (see section~\ref{sec:e1000_emu}~\footnote{For now we keep both TX and RX descriptor caches enabled.}) using both host-only and netmap networking modes.
 \\
 \\
-As already mentioned, in our experiments we will consider a VM (G1) running an UDP sender that sends UDP packets to an UDP receiver located on a second VM (G2). The sender is just an infinite loop where each iteration invokes the \texttt{send} system call. The buffer passed to the system call is always the same and its length is 60 bytes, i.e. the minimum size of a Ethernet frame.
+As already mentioned, in our experiments we will consider a VM (G1) running pkt-gen as a sender and another VM (G2) running pkt-gen as receiver. The sender is just an infinite loop where each iteration fills its local netmap TX ring with a batch of packets and performs a TXSYNC operation. The batch is composed of 256 packets, having a size of 60 bytes each. 
 %\begin{figure}[!h]
 %	\centering
 %	\includegraphics[scale=0.5]{img/G2G_netmap.png}
@@ -826,26 +828,48 @@ As already mentioned, in our experiments we will consider a VM (G1) running an U
 %	\label{img:g2g_netmap}
 %\end{figure}
 \subsection{Using host-only networking mode}
-We first analyze the case where the VMs are connected with each other using the host-only networking mode, in particular using the \textit{vboxnet0} virtual switch provided by VirtualBox.
+We first analyze the case where the VMs are connected with each other using the host-only networking mode, in particular using the \textit{vboxnet0} virtual switch provided by VirtualBox. We are going to analyze TX and RX performances separately.
 \subsubsection{TX performance}
-We will analyze the performance on the transmitter side. The measurements are shown in table~\ref{tab:vboxnet_tx}
-
-
-\begin{table}[tp]
-\caption{prova}
-\label{tab:vboxnet_tx}
-\label{prima_tabella}
+The measurements are shown in table~\ref{tab:vboxnet_tx}. All the values are computed counting the number of occurrences of each event over a period of 1 second and dividing the count itself for that time period.
+\\
+In this case we have a TX packet rate that is not really high, about 30.5 Kpps. We can see that there is a TX notification (i.e. TDT write) and an interrupt for each packet. The total number of MMIO accesses is about 180K per second, that is 6 times the number of interrupts: this means that for each interrupt we have 6 VM exits. This is due to the interrupt routine, that, for each interrupt, has to:
+\begin{enumerate}
+\item Read the \textit{Interrupt Cause Read} (ICR) register, in order to get the event that caused the interrupt itself.
+\item Write to the \textit{Interrupt Mask Clear} (IMC) register to disable the interrupts.
+\item Read the \textit{STATUS} register to flush the IMC write.
+\item Enable the interrupts by writing to the \textit{Interrupt Mask Set} (IMS) register when the routine finishes its work, 
+\item Read the STATUS register to flash the IMS write.
+\end{enumerate}
+The last MMIO access is due to the TDT write.
+\\
+Furthermore, we can see that we have \textcolor{red}{120MILA} memory accesses. Each memory access implies an operation of address translation from a guest physical address to a host physical address.
+\\
+\\
+\begin{table}[t]
 \centering
-\begin{tabular*}{\textwidth}[tb]{>{\bfseries}l@{\extracolsep{\fill}}p{6cm}}
+\begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}c}
 \toprule
-prova	& Force is a vector quantity defined as the rate of change of the momentum of the body that would be induced by that force acting alone \\\midrule
-Moment of a force & Moment of a force with respect to an origin is defined as the cross product of the position vector ( with respect to the same origin ) and the force .\\\bottomrule
+\textbf{Measured quantity} & \textbf{Measured value}\\
+\midrule
+TX packet rate		&		30.5 Kpps\\\midrule
+Interrupt rate		&		30.5 KHz\\\midrule
+Memory accesses		& 		120 KHz \\\midrule
+TX notifications		&		30.5 KHz \\\midrule
+MMIO reads			&		90 KHz\\\midrule
+MMIO writes			&		90 KHz\\
+\bottomrule
 \end{tabular*}
-\end{table}
-
+\caption{This table shows some statistics about the sender VM.}
+\label{tab:vboxnet_tx}
+\end{table}The low performance is basically due to three factors:
+\begin{itemize}
+\item \textit{TX notifications.} A notification is a write operation to the TDT register of the device, so it causes a VM exit to occur. Therefore, we have a VM exit for each packet we want to transmit, which produces a lot of overhead.
+\item \textbf{Interrupt rate.} We have an interrupt per packet transmission. 
+\item \textit{Memory accesses.}
+\end{itemize}
 \subsubsection{RX performance}
 
-\subsection{Using netmap networking mode}
+\subsection{Using netmap networking mode} \label{subsec:using_netmap_mode}
 
 \subsubsection{TX performance}
 
