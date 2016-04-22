@@ -820,7 +820,10 @@ The first scenario will be our reference for performance analysis. In this way w
 Now we are going to discuss about the performance of the current implementation (see section~\ref{sec:e1000_emu}~\footnote{For now we keep both TX and RX descriptor caches enabled.}) using both host-only and netmap networking modes.
 \\
 \\
-As already mentioned, in our experiments we will consider a VM (G1) running pkt-gen as a sender and another VM (G2) running pkt-gen as receiver. The sender is just an infinite loop where each iteration fills its local netmap TX ring with a batch of packets and performs a TXSYNC operation. The batch is composed of 256 packets, having a size of 60 bytes each. 
+As already mentioned, in our experiments we will consider a VM (G1) running pkt-gen as a sender and another VM (G2) running pkt-gen as receiver. The sender is just an infinite loop where each iteration fills its local netmap TX ring with a batch of packets and performs a TXSYNC operation. The batch is composed of 256 packets, having a size of 60 bytes each.\\
+\\
+For completeness, we will show the performances using the e1000 device in both generic mode and native mode (see section~\ref{sec:netmap_intro}).
+
 %\begin{figure}[!h]
 %	\centering
 %	\includegraphics[scale=0.5]{img/G2G_netmap.png}
@@ -832,48 +835,115 @@ We first analyze the case where the VMs are connected with each other using the 
 \subsubsection{TX performance}
 The measurements are shown in table~\ref{tab:vboxnet_tx}. All the values are computed counting the number of occurrences of each event over a period of 1 second and dividing the count itself for that time period.
 \\
-In this case we have a TX packet rate that is not really high, about 30.5 Kpps. We can see that there is a TX notification (i.e. TDT write) and an interrupt for each packet. The total number of MMIO accesses is about 180K per second, that is 6 times the number of interrupts: this means that for each interrupt we have 6 VM exits. This is due to the interrupt routine, that, for each interrupt, has to:
-\begin{enumerate}
-\item Read the \textit{Interrupt Cause Read} (ICR) register, in order to get the event that caused the interrupt itself.
-\item Write to the \textit{Interrupt Mask Clear} (IMC) register to disable the interrupts.
-\item Read the \textit{STATUS} register to flush the IMC write.
-\item Enable the interrupts by writing to the \textit{Interrupt Mask Set} (IMS) register when the routine finishes its work, 
-\item Read the STATUS register to flash the IMS write.
-\end{enumerate}
-The last MMIO access is due to the TDT write.
 \\
-Furthermore, we can see that we have \textcolor{red}{120MILA} memory accesses. Each memory access implies an operation of address translation from a guest physical address to a host physical address.
+When the adapter is in generic mode, we have a TX packet rate that is not really high, about 30.5 Kpps. We can see that there is a TX notification (i.e. TDT write) and an interrupt for each packet. \textit{TX descriptor load} is the number of times the emulation code accesses the guest physical memory to read the transmit descriptors, while \textit{TX descriptor fetched} is the average value of fetched TX descriptors in a single memory access.
+\\
+Even if we enabled the cache for transmit descriptors, we are not effectively taking advantage of it (only one fetched descriptor per memory access). This is due to the fact that we have one TX notifications per packet. When the device driver in the guest writes in the TDT register, the EMT performs a VM exit and executes the emulation code. As a result, when it wants to transmit, it finds only one descriptor that must be processed. After the descriptor processing, the EMT performs a VM entry and executes the device driver, that, in turn, will prepare another descriptor and write in TDT register and the EMT will go back to the emulation code in the host world. This procedure introduces a lot of overhead.
+\\
+\\
+The problem of TX notification can be solved by using the patched e1000 driver provided by netmap framework. In that way, the driver will push down packets in batch, resulting in one TDT register write per batch instead of one TDT write per packet. As a result, we have an improvement of performance that is about 10 times than before (about 340 Kpps).
+
+\begin{table}[t]
+\centering
+\begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
+\toprule
+\textbf{Measured quantity} & \textbf{Generic mode} & \textbf{Native mode}\\
+\midrule
+TX packet rate					&		30.5 Kpps	&	340 Kpps\\\midrule
+Interrupt rate					&		30.5 KHz	&	1.35 KHz\\\midrule
+TX notifications				&		30.5 KHz 	&	1.35 KHz\\\midrule
+TX descriptors load				& 		30.5 KHz 	&	6.8 KHz\\\midrule
+TX descriptor fetched (average)	&		1 			&	51\\
+\bottomrule
+\end{tabular*}
+\caption{This table shows statistics about the sender VM attached to the \textit{vboxnet0} virtual switch, using the adapter in both generic and native mode.}
+\label{tab:vboxnet_tx}
+\end{table}
+
+\subsubsection{RX performance}
+All measurements~\footnote{In the experiment, the sender runs pkt-gen with the adapter in native mode.} are shown in table~\ref{tab:vboxnet_tx}. Again, the values are computed counting the number of occurrences of each event over a period of 1 second and dividing the count itself for that time period.
 \\
 \\
 \begin{table}[t]
 \centering
-\begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}c}
+\begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
 \toprule
-\textbf{Measured quantity} & \textbf{Measured value}\\
+\textbf{Measured quantity} & \textbf{Generic mode} & \textbf{Native mode}\\
 \midrule
-TX packet rate		&		30.5 Kpps\\\midrule
-Interrupt rate		&		30.5 KHz\\\midrule
-Memory accesses		& 		120 KHz \\\midrule
-TX notifications		&		30.5 KHz \\\midrule
-MMIO reads			&		90 KHz\\\midrule
-MMIO writes			&		90 KHz\\
+RX packet rate					&		$\sim$200 Kpps	&	340 Kpps\\\midrule
+Interrupt rate					&		$\sim$21.5 KHz	&	31.8 KHz\\\midrule
+RX notifications				&		14.4 KHz	 	&	2.11 KHz\\\midrule
+RX descriptors load				& 		21 KHz 			&	23.08 KHz\\\midrule
+RX descriptor fetched (average)	&		10 				&	15\\
 \bottomrule
 \end{tabular*}
-\caption{This table shows some statistics about the sender VM.}
-\label{tab:vboxnet_tx}
-\end{table}The low performance is basically due to three factors:
-\begin{itemize}
-\item \textit{TX notifications.} A notification is a write operation to the TDT register of the device, so it causes a VM exit to occur. Therefore, we have a VM exit for each packet we want to transmit, which produces a lot of overhead.
-\item \textbf{Interrupt rate.} We have an interrupt per packet transmission. 
-\item \textit{Memory accesses.}
-\end{itemize}
-\subsubsection{RX performance}
+\caption{This table shows some statistics about the receiver VM attached to the \textit{vboxnet0} virtual switch. In this case the RX descriptor cache is exploited.}
+\label{tab:vboxnet_rx}
+\end{table}In generic mode, we have a packet rate that is lower than the transmitter rate, and it is also unstable. This means that the EMT on the receive side is slow. In this situation we have three threads that form a consumer-producer chain. This situation is depicted in figure~\ref{img:prod_cons}.
+\\
+\\
+We can see that the RX descriptor cache is exploited this time. This is due to the fact that the cached RX descriptors are the free descriptors that the adapter can fill with incoming packets, so it is not strictly dependent on the RDT register writes performed by the device driver on the guest.
+\\
+\\
+When the adapter is in native mode, the situation is quite different. The packet rate is stable and it is equal to the sender rate. We can see that the notifications decreased. This is thanks to the fact that the modified e1000 driver writes to the RDT register only at the end of the interrupt routine.
 
+\begin{figure}[!t]
+	\centering
+	\includegraphics[scale=0.5]{img/prod-cons.png}
+	\caption{Type 2 System Virtual Machine generic architecture}
+	\label{img:prod_cons}
+\end{figure}
 \subsection{Using netmap networking mode} \label{subsec:using_netmap_mode}
-
+Now we analyze the case where the VMs are connected with each other using the netmap mode, in particular using the VALE virtual switch provided by netmap. 
 \subsubsection{TX performance}
+\begin{table}[t]
+\centering
+\begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
+\toprule
+\textbf{Measured quantity} & \textbf{Generic mode} & \textbf{Native mode}\\
+\midrule
+TX packet rate					&		26.3 Kpps	&	1.148 Mpps\\\midrule
+Interrupt rate					&		26.3 KHz	&	3.8 KHz\\\midrule
+TX notifications				&		26.3 KHz	&	4.5 KHz\\\midrule
+TX descriptors load				& 		26.3 KHz 	&	22.4 KHz\\\midrule
+TX descriptor fetched (average)	&		1 			&	51\\\midrule
+TXSYNC rate						&		26.3 KHz	&	1.148 MHz\\
+\bottomrule
+\end{tabular*}
+\caption{This table shows some statistics about the sender VM attached to the \textit{vale0} virtual switch. In native mode we have a great improvement of performance in terms of packet rate.}
+\label{tab:vale_tx}
+\end{table}The measurements are shown in table~\ref{tab:vale_tx}.
+\\
+In generic mode, we have low performance, even lower than the host-only case. This is due to the fact that, since the netmap connector is designed for packet batching, the overhead is not amortized over a batch of packets, so we have a decrease of performance.
+\\
+\\
+In native mode, instead, we can see that the performance dramatically increased tu 1.148 Mpps, that is about \textbf{40 times better} than the generic case, and over 3 times better than the host-only case with the adapter in native mode.
+\\
+The TXSYNC rate shows how many times the TXSYNC operation is called in the connector. As we can see, we have one TXSYNC per frame. This means that, even if the e1000 adapter receives batches of packets, they are sent on the VALE switch one by one. Since the connector knows nothing about the packets arriving from the port, this situation is unavoidable, unless we do not modify the e1000 port code.
+\\
+A solution will be presented in section~\ref{sec:packet_batching}.
 
 \subsubsection{RX performance}
+\begin{table}[t]
+\centering
+\begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
+\toprule
+\textbf{Measured quantity} & \textbf{Generic mode} & \textbf{Native mode}\\
+\midrule
+RX packet rate					&		$\sim$150 Kpps	&	588 Kpps\\\midrule
+Interrupt rate					&		$\sim$21 KHz	&	23.2 KHz\\\midrule
+RX notifications				&		14.4 KHz		&	5.4 KHz\\\midrule
+RX descriptors load				& 		17 KHz	 		&	42.7 KHz\\\midrule
+RX descriptor fetched (average)	&		14 				&	14\\
+\bottomrule
+\end{tabular*}
+\caption{This table shows some statistics about the receiver VM attached to the \textit{vale0} virtual switch. Also here, in native mode we have a great improvement of performance in terms of packet rate.}
+\label{tab:vale_rx}
+\end{table}The measurements are shown in table~\ref{tab:vale_rx}.
+\\
+As far as concerns the generic mode, all the discussions made for the previous cases are still valid.
+\\
+In native mode, we can see a slight improvement of performance, about 3/4 times faster than the generic case,  about 73\% than host-only case with the adapter in native mode. The reason why the performance are not as high as the transmission ones, resides in the interrupt rate: we can see that 
 \section{Implementing mapping of descriptors} \label{subsec:memmap}
 \subsection{Implementation}
 \subsection{Performance analysis}
