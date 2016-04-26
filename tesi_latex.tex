@@ -795,22 +795,22 @@ When the port is ready, the thread starts a loop in which:
 As already mentioned, the VMM will take care of re-initializing the thread when the VM will switch back to \textit{RUNNING} state.
 \end{enumerate}
 \chapter{Optimizations on e1000 emulated device}
-In chapter 3 we described how we extended VirtualBox so that it can make use of netmap framework. In this chapter we will discuss about the problems and bottlenecks related to the current implementation, analyzing the performance. We will prove that our netmap extension is strictly necessary to achieve much better packet rates and, finally, we will propose some optimizations so that we can improve performances even further. 
+In chapter 3 we described how we extended VirtualBox so that it can make use of netmap framework. In this chapter we will discuss about the problems and bottlenecks related to the current implementation, analyzing the performance. We will prove that our netmap extension is strictly necessary to achieve much better packet rates and, finally, we will propose some optimizations so that we can improve performance even further. 
 \\
 \\
-We consider two VMs, we will call them \textit{Guest 1} (G1) and \textit{Guest 2} (G2). The VMs are connected through a virtual switch so that they can communicate with each other. Since we want the maximum achievable performance, we installed netmap on both VMs, so that they can use the tools provided by the netmap framework to send/receive traffic.
+We consider two VMs, we will call them \textit{Guest 1} (G1) and \textit{Guest 2} (G2). The VMs use an e1000 device as a virtual network card, and they are connected through a virtual switch so that they can communicate with each other. Since we want the maximum achievable performance, we installed netmap on both VMs, so that they can use the patched e1000 device drivers and the tools provided by the netmap framework to send/receive traffic at maximum rate. 
 \\
-In particular, guests run \textit{pkt-gen}: a UDP traffic generator that makes use of the netmap framework to speed-up the packet I/O. The application can be run in sender mode and receiver mode. In sender mode, the VM sends UDP packets of a given size at a given rate, while in receiver mode the VM receives all UDP packets.
+In particular, guests run \textit{pkt-gen}: a UDP traffic generator that makes use of the netmap framework to speed-up the packet I/O. The application can be run in sender mode and receiver mode. In sender mode, the VM sends UDP packets of a given size at a given rate, while in receiver mode the VM receives all UDP packets it can.
 \\
 \\
-In our case G1 will act as a sender and G2 as a receiver~\footnote{Since both VMs run the same OS (Ubuntu 15.10), we can swap the roles of G1 and G2 without any issue.}. Both guests will use an e1000 device as a virtual network card. This situation is shown in figure~\ref{img:g2g_comm}.
+In our case G1 will act as a sender and G2 as a receiver~\footnote{Since both VMs run the same OS (Ubuntu 15.10), we can swap the roles of G1 and G2 without any issue.}. This situation is shown in figure~\ref{img:g2g_comm}.
 \\
-Starting from this situation, we will analyze two scenarios: in the first case the VMs will be attached to the virtual switch provided by \textit{VBoxNetAdp} kernel module (section~\ref{subsec:kern_modules}) called \textit{vboxnet0}. So we will use the host-only networking mode (see section~\ref{subsec:net_modes}). In the second case the hosts will be attached to a VALE switch, in particular G1 will be connected to the first port (\textit{vale0:1}) and G2 will be connected to the second port of the switch (\textit{vale0:2}).
+Starting from this situation, we will analyze two scenarios: in the first case the VMs will be attached to the virtual switch provided by \textit{VBoxNetAdp} kernel module (section~\ref{subsec:kern_modules}) called \textit{vboxnet0}. So we will use the host-only networking mode (see section~\ref{subsec:net_modes}). In the second case the VMs will be attached to a VALE switch, in particular G1 will be connected to the first port (\textit{vale0:1}) and G2 will be connected to the second port of the switch (\textit{vale0:2}).
 \\
 \\
 The first scenario will be our reference for performance analysis. In this way we will prove that the second scenario is the most efficient in terms of packet rate.
 
-\begin{figure}[!ht]
+\begin{figure}[!t]
 	\centering
 	\includegraphics[scale=0.5]{img/g2g_comm.png}
 	\caption{An UDP sender running on G1 sends packets to an UDP receiver running on G2. The VMs can communicate with each other through a virtual switch.}
@@ -820,10 +820,7 @@ The first scenario will be our reference for performance analysis. In this way w
 Now we are going to discuss about the performance of the current implementation (see section~\ref{sec:e1000_emu}~\footnote{For now we keep both TX and RX descriptor caches enabled.}) using both host-only and netmap networking modes.
 \\
 \\
-As already mentioned, in our experiments we will consider a VM (G1) running pkt-gen as a sender and another VM (G2) running pkt-gen as receiver. The sender is just an infinite loop where each iteration fills its local netmap TX ring with a batch of packets and performs a TXSYNC operation. The batch is composed of 256 packets, having a size of 60 bytes each.\\
-\\
-For completeness, we will show the performances using the e1000 device in both generic mode and native mode (see section~\ref{sec:netmap_intro}).
-
+In this section we will make two experiments, both with G1 acting as a sender and G2 acting as a receiver. In the first experiment we will run a simple application that will send (receive) UDP packets using a simple UDP socket in an infinite loop. This will be our first reference in terms of performance. In the second experiment, instead, we will run the aforementioned pkt-gen application that will make use of the netmap framework. This application is just an infinite loop that, for each iteration, fills its local netmap TX ring with a batch of packet (256) and performs a TX operation. In both cases, the packets are 60 bytes long.
 %\begin{figure}[!h]
 %	\centering
 %	\includegraphics[scale=0.5]{img/G2G_netmap.png}
@@ -836,121 +833,229 @@ We first analyze the case where the VMs are connected with each other using the 
 The measurements are shown in table~\ref{tab:vboxnet_tx}. All the values are computed counting the number of occurrences of each event over a period of 1 second and dividing the count itself for that time period.
 \\
 \\
-When the adapter is in generic mode, we have a TX packet rate that is not really high, about 30.5 Kpps. We can see that there is a TX notification (i.e. TDT write) and an interrupt for each packet. \textit{TX descriptor load} is the number of times the emulation code accesses the guest physical memory to read the transmit descriptors, while \textit{TX descriptor fetched} is the average value of fetched TX descriptors in a single memory access.
+When we use a UDP socket, we have a TX packet rate that is not really high, about 30.5 Kpps. We can see that there is a TX notification (i.e. TDT write) and an interrupt for each packet. \textit{TX descriptor load} is the number of times the emulation code accesses the guest physical memory to read the transmit descriptors, while \textit{TX descriptor fetched} is the average value of fetched TX descriptors in a single memory access.
 \\
 Even if we enabled the cache for transmit descriptors, we are not effectively taking advantage of it (only one fetched descriptor per memory access). This is due to the fact that we have one TX notifications per packet. When the device driver in the guest writes in the TDT register, the EMT performs a VM exit and executes the emulation code. As a result, when it wants to transmit, it finds only one descriptor that must be processed. After the descriptor processing, the EMT performs a VM entry and executes the device driver, that, in turn, will prepare another descriptor and write in TDT register and the EMT will go back to the emulation code in the host world. This procedure introduces a lot of overhead.
 \\
 \\
-The problem of TX notification can be solved by using the patched e1000 driver provided by netmap framework. In that way, the driver will push down packets in batch, resulting in one TDT register write per batch instead of one TDT write per packet. As a result, we have an improvement of performance that is about 10 times than before (about 340 Kpps).
+The problem of TX notification is not present when we run pkt-gen, since it exploits the modifications provided in the patched e1000 device driver. In fact, for each TXSYNC operation invoked by the application, the driver pushes down packets in batch, resulting in one TDT register write per batch instead of one TDT write per packet. As a result, we have an improvement of performance that is about 10 times than before (about 340 Kpps).
 
 \begin{table}[t]
 \centering
 \begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
 \toprule
-\textbf{Measured quantity} & \textbf{Generic mode} & \textbf{Native mode}\\
+\textbf{Measured quantity} & \textbf{UDP Socket} & \textbf{Netmap native mode}\\
 \midrule
-TX packet rate					&		30.5 Kpps	&	340 Kpps\\\midrule
-Interrupt rate					&		30.5 KHz	&	1.35 KHz\\\midrule
-TX notifications				&		30.5 KHz 	&	1.35 KHz\\\midrule
-TX descriptors load				& 		30.5 KHz 	&	6.8 KHz\\\midrule
-TX descriptor fetched (average)	&		1 			&	51\\
+TX packet rate					&	30.5 KHz		&	340 Kpps\\\midrule
+Interrupt rate					&	30.5 KHz		&	1.35 KHz\\\midrule
+TX notifications					&	30.5 KHz		&	1.35 KHz\\\midrule
+TX descriptors load				&	30.5 KHz		&	6.8 KHz\\\midrule
+TX descriptor fetched (average)	&	1			&	51\\
 \bottomrule
 \end{tabular*}
-\caption{This table shows statistics about the sender VM attached to the \textit{vboxnet0} virtual switch, using the adapter in both generic and native mode.}
+\caption{This table shows statistics about the sender VM attached to the \textit{vboxnet0} virtual switch. The \textit{desciptor load} shows how many times the guest physical memory is accessed to read the TX descriptors.}
 \label{tab:vboxnet_tx}
 \end{table}
 
 \subsubsection{RX performance}
-All measurements~\footnote{In the experiment, the sender runs pkt-gen with the adapter in native mode.} are shown in table~\ref{tab:vboxnet_tx}. Again, the values are computed counting the number of occurrences of each event over a period of 1 second and dividing the count itself for that time period.
+All measurements are shown in table~\ref{tab:vboxnet_tx}. Again, the values are computed counting the number of occurrences of each event over a period of 1 second and dividing the count itself for that time period.
 \\
 \\
 \begin{table}[t]
 \centering
 \begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
 \toprule
-\textbf{Measured quantity} & \textbf{Generic mode} & \textbf{Native mode}\\
+\textbf{Measured quantity} & \textbf{UDP Socket} & \textbf{Netmap native mode}\\
 \midrule
-RX packet rate					&		$\sim$200 Kpps	&	340 Kpps\\\midrule
-Interrupt rate					&		$\sim$21.5 KHz	&	31.8 KHz\\\midrule
-RX notifications				&		14.4 KHz	 	&	2.11 KHz\\\midrule
-RX descriptors load				& 		21 KHz 			&	23.08 KHz\\\midrule
-RX descriptor fetched (average)	&		10 				&	15\\
+RX packet rate					&	30.5 Kpps	&	340 Kpps\\\midrule
+Interrupt rate					&	14.8	 KHz		&	31.8 KHz\\\midrule
+RX notifications					&	14.4 KHz	 	&	2.11 KHz\\\midrule
+RX descriptors load				& 	2 KHz 		&	23.08 KHz\\\midrule
+RX descriptor fetched (average)	&	15			&	15\\
 \bottomrule
 \end{tabular*}
 \caption{This table shows some statistics about the receiver VM attached to the \textit{vboxnet0} virtual switch. In this case the RX descriptor cache is exploited.}
 \label{tab:vboxnet_rx}
-\end{table}In generic mode, we have a packet rate that is lower than the transmitter rate, and it is also unstable. This means that the EMT on the receive side is slow. In this situation we have three threads that form a consumer-producer chain. This situation is depicted in figure~\ref{img:prod_cons}.
+\end{table}When we use UDP Sockets the packet rate is the same as the transmitter, so it is able to receive all the packets coming from the switch. 
+%Even if the receiver is able to receive all transmitted packets,  we can see a different interrupt rate. This means that the EMT on the receive side is slow. In this situation we have three threads that form a consumer-producer chain. This situation is depicted in figure~\ref{img:prod_cons}.
+\\
+We can see that the RX descriptor cache is exploited this time. This is due to the fact that the cached RX descriptors are the free descriptors that the adapter can fill with incoming packets (see section~\ref{subsec:rx_emulation}), so it is not strictly dependent on the RDT register writes performed by the device driver on the guest.
 \\
 \\
-We can see that the RX descriptor cache is exploited this time. This is due to the fact that the cached RX descriptors are the free descriptors that the adapter can fill with incoming packets, so it is not strictly dependent on the RDT register writes performed by the device driver on the guest.
+When we run pkt-gen, we can see an improvement of performance in terms of packet rate. In fact, we can see that the RX notification rate decreased greatly decreased even if the packet rate is about 10 time higher than the previous case. This is thanks to the fact that the modified e1000 driver writes to the RDT register only at the end of the interrupt routine, not for each packet. 
 \\
-\\
-When the adapter is in native mode, the situation is quite different. The packet rate is stable and it is equal to the sender rate. We can see that the notifications decreased. This is thanks to the fact that the modified e1000 driver writes to the RDT register only at the end of the interrupt routine.
+We can also notice that the interrupt rate is much higher (31.8 KHz) with respect to the sender one (1.35 KHz). The reason is that, potentially, in the RX case an interrupt is raised for each received packet. This is unavoidable because the adapter cannot guess whether or not an incoming frame is the last of a batch.
 
-\begin{figure}[!t]
-	\centering
-	\includegraphics[scale=0.5]{img/prod-cons.png}
-	\caption{Type 2 System Virtual Machine generic architecture}
-	\label{img:prod_cons}
-\end{figure}
+%\begin{figure}[!t]
+%	\centering
+%	\includegraphics[scale=0.5]{img/prod-cons.png}
+%	\caption{Two producer-consumer systems forming a chain. The first system is composed by the sender EMT as a producer and the Asynchronous I/O thread on the receive side as a consumer. The second system is composed by the the same asynchronous thread as a producer and the receiver EMT as a consumer.}
+%	\label{img:prod_cons}
+%\end{figure}
 \subsection{Using netmap networking mode} \label{subsec:using_netmap_mode}
-Now we analyze the case where the VMs are connected with each other using the netmap mode, in particular using the VALE virtual switch provided by netmap. 
+Now we analyze the case where the VMs are connected with each other using the netmap networking mode, in particular using the VALE virtual switch provided by netmap. 
 \subsubsection{TX performance}
 \begin{table}[t]
 \centering
 \begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
 \toprule
-\textbf{Measured quantity} & \textbf{Generic mode} & \textbf{Native mode}\\
+\textbf{Measured quantity} & \textbf{UDP Socket} & \textbf{Netmap native mode}\\
 \midrule
-TX packet rate					&		26.3 Kpps	&	1.148 Mpps\\\midrule
-Interrupt rate					&		26.3 KHz	&	3.8 KHz\\\midrule
-TX notifications				&		26.3 KHz	&	4.5 KHz\\\midrule
-TX descriptors load				& 		26.3 KHz 	&	22.4 KHz\\\midrule
-TX descriptor fetched (average)	&		1 			&	51\\\midrule
-TXSYNC rate						&		26.3 KHz	&	1.148 MHz\\
+TX packet rate					&	23.8 Kpps	&	1.148 Mpps\\\midrule
+Interrupt rate					&	23.8 KHz		&	3.8 KHz\\\midrule
+TX notifications					&	23.8 KHz		&	4.5 KHz\\\midrule
+TX descriptors load				&	23.8 KHz 	&	22.4 KHz\\\midrule
+TX descriptor fetched (average)	&	1 			&	51\\\midrule
+TXSYNC rate						&	26.3 KHz		&	1.148 MHz\\
 \bottomrule
 \end{tabular*}
 \caption{This table shows some statistics about the sender VM attached to the \textit{vale0} virtual switch. In native mode we have a great improvement of performance in terms of packet rate.}
 \label{tab:vale_tx}
 \end{table}The measurements are shown in table~\ref{tab:vale_tx}.
 \\
-In generic mode, we have low performance, even lower than the host-only case. This is due to the fact that, since the netmap connector is designed for packet batching, the overhead is not amortized over a batch of packets, so we have a decrease of performance.
+Using UDP packets, we have a packet rate that is even lower than the host-only case. This is due to the fact that, since the netmap connector is designed for packet batching, the overhead is not amortized over a batch of packets, so we have a decrease of performance.
 \\
 \\
-In native mode, instead, we can see that the performance dramatically increased tu 1.148 Mpps, that is about \textbf{40 times better} than the generic case, and over 3 times better than the host-only case with the adapter in native mode.
+In netmap native mode, instead, we can see that the performance dramatically increased to 1.148 Mpps, that is \textbf{over 3 times better} than the host-only case with the adapter in native mode.
 \\
-The TXSYNC rate shows how many times the TXSYNC operation is called in the connector. As we can see, we have one TXSYNC per frame. This means that, even if the e1000 adapter receives batches of packets, they are sent on the VALE switch one by one. Since the connector knows nothing about the packets arriving from the port, this situation is unavoidable, unless we do not modify the e1000 port code.
+The TXSYNC rate shows how many times the TXSYNC operation is called in the connector. As we can see, we have one TXSYNC per frame. This means that, even if the e1000 adapter receives batches of packets, they are sent on the VALE switch one by one. Since the connector knows nothing about the packets arriving from the port, this situation is unavoidable, unless we do not modify the e1000 emulation code.
 \\
-A solution will be presented in section~\ref{sec:packet_batching}.
+Ultimately, if we were able to perform only one TXSYNC per batch, we would see a great improvement of performance. A solution will be presented in section~\ref{sec:packet_batching}.
 
 \subsubsection{RX performance}
 \begin{table}[t]
 \centering
 \begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
 \toprule
-\textbf{Measured quantity} & \textbf{Generic mode} & \textbf{Native mode}\\
+\textbf{Measured quantity} & \textbf{UDP Sockets} & \textbf{Netmap native mode}\\
 \midrule
-RX packet rate					&		$\sim$150 Kpps	&	588 Kpps\\\midrule
-Interrupt rate					&		$\sim$21 KHz	&	23.2 KHz\\\midrule
-RX notifications				&		14.4 KHz		&	5.4 KHz\\\midrule
-RX descriptors load				& 		17 KHz	 		&	42.7 KHz\\\midrule
-RX descriptor fetched (average)	&		14 				&	14\\
+RX packet rate					&	23.8 Kpps	&	588 Kpps\\\midrule
+Interrupt rate					&	15 KHz		&	23.2 KHz\\\midrule
+RX notifications					&	15 KHz		&	5.4 KHz\\\midrule
+RX descriptors load				& 	1.7 KHz	 	&	42.7 KHz\\\midrule
+RX descriptor fetched (average)	&	14 			&	14\\
 \bottomrule
 \end{tabular*}
 \caption{This table shows some statistics about the receiver VM attached to the \textit{vale0} virtual switch. Also here, in native mode we have a great improvement of performance in terms of packet rate.}
 \label{tab:vale_rx}
 \end{table}The measurements are shown in table~\ref{tab:vale_rx}.
 \\
-As far as concerns the generic mode, all the discussions made for the previous cases are still valid.
+As far as concerns UDP sockets experiment, all the discussions made for the previous cases are still valid.
 \\
-In native mode, we can see a slight improvement of performance, about 3/4 times faster than the generic case,  about 73\% than host-only case with the adapter in native mode. The reason why the performance are not as high as the transmission ones, resides in the interrupt rate: we can see that 
-\section{Implementing mapping of descriptors} \label{subsec:memmap}
-\subsection{Implementation}
-\subsection{Performance analysis}
+In netmap native mode, we can see a quite improvement of performance, about 3/4 times faster than the generic case, about 73\% than host-only case with the adapter in native mode. The reason why the performance are not as high as the transmission ones, resides in the interrupt rate. Since the adapter knows nothing about packet batches, it raises an interrupt as explained in section~\ref{subsec:e1000_interrutps}. Even if the connector is able to understand whether or not the current packet is the last one of the batches, there is no way to send this information to the port without modifying the port itself. Therefore, in order to improve performance, we must modify the e1000 emulation code. These modifications will be explained in section~\ref{sec:packet_batching}.
+
 \section{Packet batching} \label{sec:packet_batching}
+In the previous section we discussed about the performances using both host-only networking mode and and VALE switches, and we proved that we achieved very high performance using the latter.
+\\
+Moreover, we showed that we can further increase both TX and RX performances by making the connector and the port aware of packet batching. In this section we will present our solution.
+
 \subsection{Implementation}
-\subsection{Modification of netmap implementation}
+In order to achieve higher performance on both TX and RX sides, we made some  modifications on the e1000 port and on our netmap connector.
+
+\subsubsection{TX path}
+On the TX path, we modified both port and connector. In particular:
+\begin{itemize}
+\item We added some lines of code where the port calls the \textit{pfnSendBuf} callback on the connector. Before calling it, we check if the current outgoing frame is the last one in the batch by looking at TDT and TDH registers. 
+\\
+Let $N_s$ be the number of TX descriptors. If $$(TDT - TDH) \bmod N_s \equiv 1$$ then we set a flag (\textit{TXSYNC} flag) on the S/G data structure passed to the callback as an argument, so that the connector understands that this is the last frame in the batch.
+\item In the implementation of the \textit{pfnSendBuf} callback in the connector, we check if the \textit{TXSYNC} flag is set. If this is the case, then we perform the TXSYNC operation, otherwise we just update the netmap indexes and return.
+\end{itemize}
+In that way, instead of doing a TXSYNC for each outgoing packet, we perform that operation only at the end of the batch.
+\\
+We must point out that we did not add anything new in the S/G data structure. In fact, this structure contains a string of 32 bits used for flags. 28 bits of this string are used for other purposes, while the remaining four bits are  available for new custom features.
+\\
+\\
+The modification on the port has effect only in netmap networking mode, since the flag we set are checked only by our connector.
+
+\subsubsection{RX path}
+Also on the RX path, we modified both port and connector. In particular:
+\begin{itemize}
+\item In the asynchronous thread body, we enter a loop in which we call the \textit{pfnReceive} callback on the port until there are available incoming frames or until the port is not available for receiving anymore. After the loop, we added a further call to the \textit{pfnReceive} callback, passing a \textit{NULL} pointer instead of available data. This is our way to notify the port that there are no more packets in the batch.
+\item We added a check on the \textit{pfnReceive} implementation of the e1000 port, in which we check the pointer to available data passed as argument. If it is \textit{NULL}, it means that the batch is finished, so we raise an interrupt and return.
+\\
+Moreover, since we want to raise an interrupt only in that case, we disabled all other interrupts in the receiving path. 
+\end{itemize}
+In this case the modifications we made are compatible \textbf{only} using the netmap networking mode and the e1000 device as emulated network adapter. In fact, the modified port will raise an interrupt \textbf{if and only if} it has a \textit{NULL} pointer as argument, but only our connector will pass this value to the port. Therefore, if we change the networking mode (e.g. host-only), the guest will not be able to receive any packets.
+\\
+The same \textit{may} happen if we change the port. Since it is not suppose to happen that a connector passes a \textit{NULL} value to the port instead of the available data, the effects of this particular function call may be unpredicted and may also cause a crash of the VM itself.
+
 \subsection{Performance analysis}
+\begin{table}[t]
+\centering
+\begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
+\toprule
+\textbf{Measured quantity} & \textbf{TX stats.} & \textbf{RX stats.}\\
+\midrule
+Packet rate							&	1.615 Mpps	&	940 Kpps\\\midrule
+\textbf{Interrupt rate}				&	6.3 KHz		&	\textbf{2 KHz}\\\midrule
+TX/RX notifications					&	6.3 KHz		&	83 KHz\\\midrule
+Descriptors load						& 	32 KHz	 	&	63.2 KHz\\\midrule
+Descriptor fetched (average)			&	51 			&	15\\\midrule
+\textbf{TXSYNC}						&	\textbf{6.38 Khz}& /\\
+
+\bottomrule
+\end{tabular*}
+\caption{This table shows statistics about both VMs attached to the \textit{vale0} virtual switch. We highlighted the items that caused the performances improvements.}
+\label{tab:netmap_sync}
+\end{table}
+The results are shown in table~\ref{tab:netmap_sync}. As we can see, we have a great improvement of performances. We achieved 1.615 Mpps on the sender and  940 Kpps on the receiver.
+\\
+As highlighted in the table, we can see that the TXSYNCs are performed only at the end of the batch. Also the interrupt raised to the guest from the port are now amortized over the batch.
+\\
+\\
+\begin{figure}[!t]
+	\centering
+	\includegraphics[scale=0.5]{img/prod-cons.png}
+	\caption{Two producer-consumer systems forming a chain. The first system is composed by the sender EMT as a producer and the Asynchronous I/O thread on the receive side as a consumer. The second system is composed by the the same asynchronous thread as a producer and the receiver EMT as a consumer.}
+	\label{img:prod_cons}
+\end{figure}We can also notice that the receive rate is less than the transmit rate. That is caused by a bottleneck in a chained producer-consumer system.
+\\
+Figure~\ref{img:prod_cons} depicts our situation. We have the sender EMT that sends frame using the virtual switch. The receiver thread reads the new available data, writes them in the guest physical memory, and raises an interrupt to the guest so that the EMT of the receiver VM can consume the new data.
+\\
+In this system, the slow part is on the receive side. The reasons for this slowness are multiple, such as lock acquisitions/releases and context switch between guest world and host world. The overhead introduced by these factors is not manageable.
+
+\section{Implementing mapping of descriptors} \label{subsec:memmap}
+Looking at the previous tables, in particular table~\ref{tab:netmap_sync}, we can see the \textit{Descriptor load} row. As already mentioned, this value measures the accesses in guest physical memory performed by the emulated adapter. Each guest physical memory access involves an address translation, that implies some overhead. At \textit{normal} packet rates (e.g. about 30 Kpps), this overhead is negligible, but when we deal with very high packet rates, this becomes notable.
+\\
+As a solution, we adopted a solution that avoids those translations by \textit{mapping} a portion of the \textbf{guest physical} memory into the \textbf{host virtual} memory, so that the descriptors can be accessed by using pointers.
+\subsection{Memory region containing descriptors}
+In order to map the e1000 descriptors in the host virtual memory, we need to know where the descriptors are located in the guest physical memory. To do so, we look at the aforementioned \textit{TDBAH} and \textit{TDBAL} registers for TX descriptors, and \textit{RDBAH} and \textit{RDBAL} registers for RX descriptors. In this way, we find the base address of the physical pages containing the descriptors.
+\\
+Moreover, the \textit{TDLEN} and \textit{RDLEN} registers contain the length in bytes of the physical memory occupied by the TX descriptors and RX descriptors, respectively. 
+\\\\
+\begin{figure}[!t]
+	\centering
+	\includegraphics[width=\textwidth]{img/phys_mem.png}
+	\caption{The mapped memory region for TX descriptors. The RX descriptor are mapped in the same way, but with the RX related registers. Notice that TDLEN is right-shifted by 3. This represent the division by 8.}
+	\label{img:memmap}
+\end{figure}Since the descriptors must be accessed in DMA by the adapter, we have the guarantee that the descriptors are allocated in contiguous pages~\footnote{In most Operating Systems, a page is 4 Kilobytes.} in physical memory.
+\\
+Therefore, the mapped region will start from $$TDBAH|TDBAL$$ up to  $$TDBAH|TDBAL + TDLEN / 8$$ for the TX descriptors~\footnote{The mapping of RX descriptors is analogous.}.
+\\
+Figure~\ref{img:memmap} depicts the memory region mapped in the host virtual memory.
+\\
+\\
+Since each descriptor is 16 bytes long, and a memory page is 4 kilobytes, in a single page we can map up to 256 descriptors, which is the default number of descriptors per ring that the device driver sets as default.
+Furthermore, the e1000 devices support up to 4096 descriptors per ring, so our implementation supports the mapping of up to 16 memory pages, containing 256 descriptor each.
+
+\subsection{Implementation}
+Since we want to map the descriptors, we do not need any descriptor cache. Therefore, we disabled the both TX and RX descriptor caches on the e1000 emulation code.
+\\
+\\
+We implemented the mapping of the region using a function provided by VirtualBox: \textit{PDMDevHlpPhysGCPhys2CCPtr}. This function maps a guest physical memory page into the virtual memory of the host. It takes, among the others, the base address of the physical memory and the pointer in which will store the address of the mapped page.
+\\
+Since the base address of the descriptors may change during the execution of the VM (i.e. the value TDBAH/RDBAH and TDBAL/RDBAL registers), or even the number of descriptors itself (i.e. TDLEN/RDLEN), we customized the callback functions for write operation of these registers so that we can remap the pages when the registers values change.
+\\
+The mapping function is only available in R3 context, but the callbacks are always called in R0 context. Therefore, we added two new event queues to the port, one for TX descriptors, one for RX descriptors (see section~\ref{sec:e1000_emu}). When there is a write in one of the descriptors-related registers, the EMT:
+\begin{enumerate}
+\item Stores the old value of the register.
+\item Updates the register.
+\item Since it is in R0 context, posts an item in the event queue, so that it will execute the related callback after it switches to R3 context, but before it resumes executing guest code.
+\item Executes the related callback function. This function checks whether or not the new value is equal to the old value. If it is true, then simply returns, otherwise it unmaps all the mapped memory pages (if any) and remaps them back using the new value of the register.
+\end{enumerate}
+All these operations may be expensive in terms of execution time, but since a remapping operation seldom happens, its cost is well amortized.
+\subsection{Performance analysis}
+
 \chapter{Conclusions}
 
 %\addcontentsline{toc}{section}{\refname}
