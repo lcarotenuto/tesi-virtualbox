@@ -146,10 +146,11 @@ In order to improve I/O virtualization techniques, three approaches have been de
 \item Design \textit{virtual} device models in order to reduce expensive operations in device emulations (e.g. I/O accesses and interrupts). This approach is known as \textit{device paravirtualization} and produced some virtual device models, such as VirtIO (\cite{virtio}).
 This requires synchronization and memory sharing between the guest and VMM in order to exchange information, while interrupts are used only for notification purposes. In that way it is easier to minimize the amount of VM exits.
 \end{itemize}
+
 \chapter{VirtualBox}
 In this chapter we will present VirtualBox hypervisor, giving details about its features (section~\ref{sec:features}), its internal architecture (section~\ref{sec:architecture}), and how the behavior of e1000 device is emulated (section~\ref{sec:e1000_emu}).
 \\
-As host OS, we used Ubuntu 15.10 64-bit with kernel version 4.2.0. The guest OS is generally the same as the host OS host, but some tests have been performed with FreeBSD as guest too.
+As host OS, we used Ubuntu 15.10 64-bit with kernel version 4.2.0. The guest OS is the same as the host one.
 
 \section{VirtualBox features} \label{sec:features}
 VirtualBox is a free, open source hypervisor, written entirely in C/C++. In particular, it is a cross-platform type 2 VMM, so it is able to run an arbitrary OS, regardless of the host OS, and it is implemented as a regular process in the host OS, therefore it can make use of all OS services. At the time of the writing, VirtualBox version number is 5.0.4, so we will refer to that version for Linux OS (since our host OS is Linux based).
@@ -232,7 +233,7 @@ When starting a VM, through its R0 support kernel driver, VirtualBox has set up 
 \\
 In particular, the recompiler is used when guest code disables interrupts and VirtualBox cannot figure out when they will be switched back on. The recompiler is based on the dynamic translation technique (section~\ref{subsec:dyn_tr}).
 \end{itemize}
-Unfortunately this only wokrs to a degree. Among others, the following situations require special handling:
+Unfortunately this only works to a degree. Among others, the following situations require special handling:
 \begin{enumerate}
 \item Running R0 code in R1 causes a lot of additional instruction faults, as R1 is not allowed to execute any privileged instructions (of which guest's R0 contains plenty). With each of these faults, the VMM must step in and emulate the code to achieve the desired behavior. While this works, emulating thousands of these faults is very expensive and severely hurts the performance of the virtualized guest.
 \item There are certain flaws in the implementation of R1 in the x86 architecture that were never fixed. Certain instructions that \textit{should} trap in R1 don't. If the guest is allowed to execute these, it will see the true state of the CPU, not the virtualized state.
@@ -251,11 +252,11 @@ In addition, every time a fault occurs, VirtualBox analyzes the offending code t
 \subsection{Hardware virtualization}
 As stated in section~\ref{subsec:hw_virt}, with Intel VT-x there are two distinct modes of CPU operation: root mode and non-root mode.
 \begin{itemize}
-\item In root mode, the CPU operates much like older generations of processors without VT-x support. There are four privilege rings, and the same instruction set is supported, with the addition of several virtualization specific instructions. Root mode is what a host operating system without virtualziation uses, and it is also used by a hypervisor when virtualization is active.
+\item In root mode, the CPU operates much like older generations of processors without VT-x support. There are four privilege rings, and the same instruction set is supported, with the addition of several virtualization specific instructions. Root mode is what a host operating system without virtualization uses, and it is also used by a hypervisor when virtualization is active.
 \item In non-root mode, CPU operation is significantly different. There are still four privilege rings and the same instruction set, but a new structure called \textit{Virtual Machine Control Structure} (VMCS) now controls the CPU operation and determines how certain instructions behave. Non-root mode is where guest systems run.
 \end{itemize}
 The VMCS includes a guest and host state area which is saved/restored when switching between the two modes (\textit{VM entry} and \textit{VM exit}). Most importantly, the VMCS controls which guest operations will cause VM exits.
-Thanks to the VMCS, a hypervisor can allow a guest to write certain bits in shadowed control registers,but not others. This enables efficient virtualziation in cases where guests can be allowed to write control bits without disrupting the hypervisor, while preventing them from altering control bits over which the VMM needs to retain full control. The VMCS also provides control over interrupt delivery and exceptions.
+Thanks to the VMCS, a hypervisor can allow a guest to write certain bits in shadowed control registers,but not others. This enables efficient virtualization in cases where guests can be allowed to write control bits without disrupting the hypervisor, while preventing them from altering control bits over which the VMM needs to retain full control. The VMCS also provides control over interrupt delivery and exceptions.
 \\
 \\
 Whenever an instruction or event causes a VM exit, the VMCS contains information about the exit reason. Thus the hypervisor can efficiently handle the condition without needing advanced techniques such as CSAM and PATM described above.
@@ -300,7 +301,7 @@ The VM  receives its network address and configuration on the private network fr
 \\
 Even though technically, everything that can be done using internal networking can also be done using bridged networking, there are security advantages with internal networking. In bridged mode, all traffic goes through a physical interface of the host system. It is therefore possible to attach a packet sniffer to the host interface and log all traffic that goes over it. If, for any reason, the user prefers two or more VMs on the same machine to communicate privately, hiding their data from both the host system and the user, bridged networking therefore is not an option.
 
-\item \textbf{Host-only networking} Host-only networking can be thought as a hybrid berween the bridged and internal networking modes: as with bridged networking, the virtual machines can talk to each other and the host as if they were connected through a physical Ethernet switch. Similarly, as with internal networking however, a physical networking interface need not to be present, and the virtual machines cannot talk to the world outside the host since they are not connected to a physical networking interface.
+\item \textbf{Host-only networking} Host-only networking can be thought as a hybrid between the bridged and internal networking modes: as with bridged networking, the virtual machines can talk to each other and the host as if they were connected through a physical Ethernet switch. Similarly, as with internal networking however, a physical networking interface need not to be present, and the virtual machines cannot talk to the world outside the host since they are not connected to a physical networking interface.
 \\
 Instead, when host-only networking is used, VirtualBox creates a new software interface on the host (using \textit{vboxnetadp} kernel module) which then appears next to the existing network interfaces. In other words, whereas with bridged networking an existing physical interface is used to attach virtual machines to, with host-only networking a new "loopback" interface is created on the host. And whereas internal networking the traffic between the VMs cannot be seen, the traffic on the "loopback" interface on the host can be intercepted.
 \end{itemize}
@@ -351,9 +352,9 @@ The datapath refers to the software interface that the OS uses in order to trans
 When the device driver wants to send an Ethernet frame through the adapter, it has to tell the adapter where the frame is stored in physical memory and how long it is. Once the device is aware of where the frame is stored, it can directly access the physical memory and send the frame on the wire. Similarly, when a frame arrives from the wire, the adapter has to store it in the physical memory. For this reason, it must know in advance where to store the frames, so the device driver must tell the adapter where it can store arrived frames. If it is not the case, the adapter will drop incoming frames.
 \\
 \\
-As we can see, in order to achieve this information exchange, there must be a well-defined interface between the device driver and the adapter. This interface is known as a \textit{ring}. A ring is a circular \textbf{array} (i.e. a countiguous zone in memory) of \textit{descriptors} that are used to exchange  those information. A network device has at least two rings: one for transmission (\textit{TX ring}) and the other for reception (\textit{RX ring}). A network adapter can have multiple TX/RX rings, possibly with different priorities and/or policies, so that it permits traffic engineering.
+As we can see, in order to achieve this information exchange, there must be a well-defined interface between the device driver and the adapter. This interface is known as a \textit{ring}. A ring is a circular \textbf{array} (i.e. a contiguous zone in memory) of \textit{descriptors} that are used to exchange  those information. A network device has at least two rings: one for transmission (\textit{TX ring}) and the other for reception (\textit{RX ring}). A network adapter can have multiple TX/RX rings, possibly with different priorities and/or policies, so that it permits traffic engineering.
 \\
-However, VirtualBox implementation of e1000 device, offers only one ring per direction. The number of descriptors per ring (i.e. the length of the array), can be choosen by the device driver. In e1000 this number must be a power of 2 and less than or equal to 4096.
+However, VirtualBox implementation of e1000 device, offers only one ring per direction. The number of descriptors per ring (i.e. the length of the array), can be chosen by the device driver. In e1000 this number must be a power of 2 and less than or equal to 4096.
 
 \subsection{TX ring}
 The TX ring is an array containing \textit{N} TX descriptors. Each descriptor is 16 bytes long and contains the physical address of the associated buffer, its length (i.e. the length of the stored frame) and some status flags. Among the others, it contains the \textit{Descriptor Done} flag (DD) and the \textit{End of OPeration} flag (EOP). The DD flag is set by the adapter to tell the device driver that the TX descriptor has been successfully processed. The EOP flag is used by the device driver to tell the adapter whether that TX descriptor contains a complete packet or only a part of it (e.g. because it does not fit in the buffer); so if a packet is spread among \textit{N} TX descriptors, the first \textit{N-1} descriptors will have the EOP flag set to 0, and the last one will have the flag set to 1.
@@ -428,7 +429,7 @@ Figure~\ref{img:rx_ring} shows the RX ring with its registers.
 	\label{img:rx_ring}
 \end{figure}
 
-\subsection{e1000 interrupts} \label{subsec:e1000_interrutps}
+\subsection{e1000 interrupts} \label{subsec:e1000_interrupts}
 The e1000 network adapter can generate interrupts for several reasons, but we are only interested in two of them:
 \begin{itemize}
 \item \textit{TX interrupts}: these interrupts are raised when the transmission of one or more frames completed. Each TX descriptor has a bit flag \textit{Report Status} (RS), that, if set, tells the adapter to raise an interrupt as soon as the associated frame is transmitted. Anyway, an interrupt is always sent when the adapter reaches the stop condition ($TDT == TDH$).
@@ -498,7 +499,7 @@ If the trylock succeeds, then go to the next step, otherwise the function return
 \item \textit{Copies the frame} It reads the physical address pointed by the current descriptor (where the frame is stored) and copies it into the buffer provided by the connector.
 \item \textit{Possibly Transmits frame} If the packet is complete, i.e. EOP flag of TX descriptor is set to 1, then it calls the \texttt{pfnSendBuf} provided by the connector, passing the previously allocated buffer as an argument.
 \item \textit{Updates register} It circularly increments the TDH register.
-\item \textit{Possibly raises an interrupt} If at least one complete packet has been sent, it \textit{may} raise an interrupt to notify the guest that one or more frames have been sent (see section~\ref{subsec:e1000_interrutps}). If there are other descriptors available ($TDT \neq TDH$), then go back to step 2.
+\item \textit{Possibly raises an interrupt} If at least one complete packet has been sent, it \textit{may} raise an interrupt to notify the guest that one or more frames have been sent (see section~\ref{subsec:e1000_interrupts}). If there are other descriptors available ($TDT \neq TDH$), then go back to step 2.
 \item \textit{Releases the lock} After all operations, it releases the lock acquired at step 1 calling the \texttt{pfnEndXmit} provided by the connector.
 \end{enumerate}
 We can see that for each available descriptor, the EMT must read the guest physical memory in order to get the current TX descriptor. This introduces an high overhead, particularly when the number of available descriptors is much higher than 1.
@@ -541,7 +542,7 @@ When RX descriptor cache is disabled, this function:
 \item \textit{Fills the buffer} After loading the RX descriptor, it writes the (possibly padded) packet into the buffer pointed by the loaded RX descriptor. If the packet does not fit the buffer, the EOP flag of the RX descriptor is set to 0, otherwise the flag is set to 1.
 \item \textit{Writes back the RX descriptor} After the RX descriptor has been filled with data, it sets the DD bit to 1 and writes back the RX descriptor in memory.
 \item \textit{Updates register} It circularly increments the RDH register.
-\item \textit{Possibly raises an interrupt} If at least one complete packet is successfully delivered, it \textit{may} raise an interrupt to notify the guest that one or more frames have been received (see section~\ref{subsec:e1000_interrutps}). If there is still data to be processed (e.g. a packet is not completely stored), go back to step 3.
+\item \textit{Possibly raises an interrupt} If at least one complete packet is successfully delivered, it \textit{may} raise an interrupt to notify the guest that one or more frames have been received (see section~\ref{subsec:e1000_interrupts}). If there is still data to be processed (e.g. a packet is not completely stored), go back to step 3.
 \end{enumerate}
 When the reception is completed (i.e. the \texttt{pfnReceive} function returns), the recv thread goes back to sleep waiting for new incoming packets.
 \\
@@ -853,7 +854,7 @@ TX descriptors load				&	30.5 KHz		&	6.8 KHz\\\midrule
 TX descriptor fetched (average)	&	1			&	51\\
 \bottomrule
 \end{tabular*}
-\caption{This table shows statistics about the sender VM attached to the \textit{vboxnet0} virtual switch. The \textit{desciptor load} shows how many times the guest physical memory is accessed to read the TX descriptors.}
+\caption{This table shows statistics about the sender VM attached to the \textit{vboxnet0} virtual switch. The \textit{descriptor load} shows how many times the guest physical memory is accessed to read the TX descriptors.}
 \label{tab:vboxnet_tx}
 \end{table}
 
@@ -942,7 +943,7 @@ RX descriptor fetched (average)	&	14 			&	14\\
 \\
 As far as concerns UDP sockets experiment, all the discussions made for the previous cases are still valid.
 \\
-In netmap native mode, we can see a quite improvement of performance, about 3/4 times faster than the generic case, about 73\% than host-only case with the adapter in native mode. The reason why the performance are not as high as the transmission ones, resides in the interrupt rate. Since the adapter knows nothing about packet batches, it raises an interrupt as explained in section~\ref{subsec:e1000_interrutps}. Even if the connector is able to understand whether or not the current packet is the last one of the batches, there is no way to send this information to the port without modifying the port itself. Therefore, in order to improve performance, we must modify the e1000 emulation code. These modifications will be explained in section~\ref{sec:packet_batching}.
+In netmap native mode, we can see a quite improvement of performance, about 3/4 times faster than the generic case, about 73\% than host-only case with the adapter in native mode. The reason why the performance are not as high as the transmission ones, resides in the interrupt rate. Since the adapter knows nothing about packet batches, it raises an interrupt as explained in section~\ref{subsec:e1000_interrupts}. Even if the connector is able to understand whether or not the current packet is the last one of the batches, there is no way to send this information to the port without modifying the port itself. Therefore, in order to improve performance, we must modify the e1000 emulation code. These modifications will be explained in section~\ref{sec:packet_batching}.
 
 \section{Packet batching} \label{sec:packet_batching}
 In the previous section we discussed about the performances using both host-only networking mode and and VALE switches, and we proved that we achieved very high performance using the latter.
@@ -1012,12 +1013,12 @@ As highlighted in the table, we can see that the TXSYNCs are performed only at t
 \\
 Figure~\ref{img:prod_cons} depicts our situation. We have the sender EMT that sends frame using the virtual switch. The receiver thread reads the new available data, writes them in the guest physical memory, and raises an interrupt to the guest so that the EMT of the receiver VM can consume the new data.
 \\
-In this system, the slow part is on the receive side. The reasons for this slowness are multiple, such as lock acquisitions/releases and context switch between guest world and host world. The overhead introduced by these factors is not manageable.
+In this system, the slow part is on the receive side. The reasons for this slowness are multiple, such as synchronization between the receiver thread and the receiver EMT and context switches between guest world and host world. The overhead introduced by these factors is not manageable since it is strictly dependent on the computation power of the host.
 
 \section{Implementing mapping of descriptors} \label{subsec:memmap}
-Looking at the previous tables, in particular table~\ref{tab:netmap_sync}, we can see the \textit{Descriptor load} row. As already mentioned, this value measures the accesses in guest physical memory performed by the emulated adapter. Each guest physical memory access involves an address translation, that implies some overhead. At \textit{normal} packet rates (e.g. about 30 Kpps), this overhead is negligible, but when we deal with very high packet rates, this becomes notable.
+Looking at the previous tables, in particular table~\ref{tab:netmap_sync}, we can see the \textit{Descriptor load} row, which has a value of 32 KHz for transmitter and 63.2 KHz for receiver. As already mentioned, this value measures the accesses in guest physical memory performed by the emulated adapter. Each guest physical memory access involves an address translation, that implies some overhead. At \textit{normal} packet rates (e.g. about 30 Kpps), this overhead is negligible, but when we deal with very high packet rates, this becomes notable.
 \\
-As a solution, we adopted a solution that avoids those translations by \textit{mapping} a portion of the \textbf{guest physical} memory into the \textbf{host virtual} memory, so that the descriptors can be accessed by using pointers.
+Therefore, we adopted a solution that avoids those translations by \textit{mapping} a portion of the \textbf{guest physical} memory into the \textbf{host virtual} memory, so that the descriptors can be accessed by the host world using pointers.
 \subsection{Memory region containing descriptors}
 In order to map the e1000 descriptors in the host virtual memory, we need to know where the descriptors are located in the guest physical memory. To do so, we look at the aforementioned \textit{TDBAH} and \textit{TDBAL} registers for TX descriptors, and \textit{RDBAH} and \textit{RDBAL} registers for RX descriptors. In this way, we find the base address of the physical pages containing the descriptors.
 \\
@@ -1028,21 +1029,21 @@ Moreover, the \textit{TDLEN} and \textit{RDLEN} registers contain the length in 
 	\includegraphics[width=\textwidth]{img/phys_mem.png}
 	\caption{The mapped memory region for TX descriptors. The RX descriptor are mapped in the same way, but with the RX related registers. Notice that TDLEN is right-shifted by 3. This represent the division by 8.}
 	\label{img:memmap}
-\end{figure}Since the descriptors must be accessed in DMA by the adapter, we have the guarantee that the descriptors are allocated in contiguous pages~\footnote{In most Operating Systems, a page is 4 Kilobytes.} in physical memory.
+\end{figure}Since the descriptors must be accessed in DMA by the adapter, we have the guarantee that the descriptors are allocated in contiguous pages~\footnote{In most Operating Systems, the size of a page is 4 Kilobytes.} in physical memory.
 \\
-Therefore, the mapped region will start from $$TDBAH|TDBAL$$ up to  $$TDBAH|TDBAL + TDLEN / 8$$ for the TX descriptors~\footnote{The mapping of RX descriptors is analogous.}.
+Therefore, the mapped region will start from the base address $$TDBAH|TDBAL$$ up to  $$TDBAH|TDBAL + TDLEN / 8$$ address for the TX descriptors~\footnote{The mapping of RX descriptors is analogous.}.
 \\
 Figure~\ref{img:memmap} depicts the memory region mapped in the host virtual memory.
 \\
 \\
-Since each descriptor is 16 bytes long, and a memory page is 4 kilobytes, in a single page we can map up to 256 descriptors, which is the default number of descriptors per ring that the device driver sets as default.
+Since each descriptor is 16 bytes long, and a memory page is 4 kilobytes, in a single page we can map up to 256 descriptors, which is the default number of descriptors per ring that the device driver sets by default.
 Furthermore, the e1000 devices support up to 4096 descriptors per ring, so our implementation supports the mapping of up to 16 memory pages, containing 256 descriptor each.
 
 \subsection{Implementation}
-Since we want to map the descriptors, we do not need any descriptor cache. Therefore, we disabled the both TX and RX descriptor caches on the e1000 emulation code.
+Since we want to map the descriptors, we do not need any descriptor cache. Therefore, we disabled both TX and RX descriptor caches on the e1000 emulation code.
 \\
 \\
-We implemented the mapping of the region using a function provided by VirtualBox: \textit{PDMDevHlpPhysGCPhys2CCPtr}. This function maps a guest physical memory page into the virtual memory of the host. It takes, among the others, the base address of the physical memory and the pointer in which will store the address of the mapped page.
+We implemented the mapping of the region using a function provided by VirtualBox: \textit{PDMDevHlpPhysGCPhys2CCPtr}. This function maps a guest physical memory page into the virtual memory of the host. It takes, among the others, the base address of the physical memory and a pointer that, after the execution of the function, will be used to access the mapped page.
 \\
 Since the base address of the descriptors may change during the execution of the VM (i.e. the value TDBAH/RDBAH and TDBAL/RDBAL registers), or even the number of descriptors itself (i.e. TDLEN/RDLEN), we customized the callback functions for write operation of these registers so that we can remap the pages when the registers values change.
 \\
@@ -1053,10 +1054,80 @@ The mapping function is only available in R3 context, but the callbacks are alwa
 \item Since it is in R0 context, posts an item in the event queue, so that it will execute the related callback after it switches to R3 context, but before it resumes executing guest code.
 \item Executes the related callback function. This function checks whether or not the new value is equal to the old value. If it is true, then simply returns, otherwise it unmaps all the mapped memory pages (if any) and remaps them back using the new value of the register.
 \end{enumerate}
-All these operations may be expensive in terms of execution time, but since a remapping operation seldom happens, its cost is well amortized.
+All these operations may be expensive in terms of execution time, but since a remapping operation seldom happens (e.g. the reset of the adapter), its cost is well amortized.
+\\
+\\
+This new optimization is completely compatible with other networking modes, since it does not affect the interaction between port and connector.
 \subsection{Performance analysis}
+Thanks to this optimization, we do not need to translate the guest physical address each time we need a descriptor. Instead, we can directly access it by means of a pointer.
+\\
+Table~\ref{tab:netmap_mapping} shows the performances in both TX and RX sides.
+\\
+\\
+We can see that we have an improvement of performance in terms of packet rates that is 33\% in TX case and 45\% in RX case.
+\\
+Since we disabled descriptors caches, the adapter would have loaded only one descriptor per memory access. Therefore, thanks to memory mapping, we saved the overhead time that a total of \textbf{3.5 millions} of address translations would have caused for each packet. 
+\begin{table}[t]
+\centering
+\begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
+\toprule
+\textbf{Measured quantity} & \textbf{TX stats.} & \textbf{RX stats.}\\
+\midrule
+Packet rate							&	2.2 Mpps		&	1.370 Mpps\\\midrule
+Interrupt rate						&	8.9 KHz		&	2.8 KHz\\\midrule
+Descriptors accesses					& 	2.2 MHz	 	&	1.37 MHz\\
+\bottomrule
+\end{tabular*}
+\caption{This table shows the performances when we enable both packet batching and memory mapping. Since we disabled descriptors caches, we have an access for each packet transmitted/receive}
+\label{tab:netmap_mapping}
+\end{table}
+
+\section{Code optimization}
+We can further improve performance by means of small optimizations in the e1000 port.
+\\
+The emulation code contains some statements that are not useful (e.g. collecting statistics) and, at very high packet rates, introduce a notable overhead because they are executed for each single packet. We deleted those statements to improve performance:
+\begin{itemize}
+\item \textit{Useless lock acquisitions} Acquiring a lock may cause overhead. In the code there are some locks that are useless: as a matter of fact, also the documentation contained in the code itself says that one of these locks is useless. Therefore, we eliminated these locks.
+\item \textit{Collecting statistics} In the code there are some functions whose purpose is to collect some statistics. These functions introduce overhead since they need to acquire a lock (that we already deleted) but also they perform some memory comparisons that introduce some overhead. Therefore, we deleted the calls to those functions.
+\item \textit{Extra memory copy} In the RX path, for each received packet, there is copy from a local buffer to another local buffer, which is completely useless. Therefore, we avoid this extra copy.
+\end{itemize}
+As already mentioned, these statements would not affect performance with normal rates, but since we are dealing with millions of packets per second, the effect of a negligible overhead is amplified hundreds of times, so that it becomes notable.
+\\
+In table~\ref{tab:netmap_minors} the packet rates after these optimizations are shown.
+\\
+\\
+As we can see, we have an improvement in terms of rate of received packets, while the TX packet rate remains equal to the previous case. This is due to the fact that the optimizations mostly concern the RX path, and, moreover, this is is the part that is strictly related to the computation power of the host. Therefore, it is easy to understand that avoiding statements that imply some expense in terms of computation time, it can quite improve performance.
+\begin{table}[t]
+\centering
+\begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
+\toprule
+\textbf{Measured quantity} & \textbf{TX stats.} & \textbf{RX stats.}\\
+\midrule
+Packet rate							&	2.2 Mpps		&	1.750 Mpps\\
+\bottomrule
+\end{tabular*}
+\caption{This table shows the packet rates after our code optimizations and when we enable both packet batching and memory mapping. We have an improvement only on RX side because it is the one that mostly depends on the computation power of the host.}
+\label{tab:netmap_minors}
+\end{table}
 
 \chapter{Conclusions}
+%\begin{table}[!h]
+%\centering
+%\begin{tabular*}{\textwidth}[tb]{l@{\extracolsep{\fill}}cc}
+%\toprule
+%\textbf{Measures} & \textbf{Host-only mode} & \textbf{Optimized netmap mode}\\
+%\midrule
+%TX Packet rate		&	340 Kpps		&	2.2 Mpps\\\midrule
+%RX Packet rate		&	340 Kpps		&	1.75 Mpps\\
+%\bottomrule
+%\end{tabular*}
+%\caption{This table shows the packet rates using host-only networking mode, netmap networking mode without optimizations and netmap networking mode with optimizations.}
+%\label{tab:conclusion}
+%\end{table}
+In this work we showed the architecture of VirtualBox, in particular we gave details on the virtualization and networking architecture parts. We then presented our extension to VirtualBox so that it can support the netmap framework, implementing a new connector that is able to connect a VM to a VALE virtual switch. Subsequently, we analyzed the performance of the existing implementation using an e1000 device as virtual adapter and comparing the performances with the host-only networking mode and our new extension, pointing out the bottlenecks and problems. We also presented solutions to these problems exploiting packet batching, memory mapping and optimization of the e1000 emulation code in order to further improve performance.
+\\
+\\
+We successfully improved performance starting from 340 Kpps in the host-only case, both TX and RX rates, achieving up to 2.2 Mpps in transmission and 1.75 Mpps in reception using netmap mode with optimizations. This means that we improved the TX packet rate of \textbf{6.5 times} and the RX packet rate of \textbf{5 times} with respect to host-only mode.
 
 %\addcontentsline{toc}{section}{\refname}
 \begin{thebibliography}{30}
