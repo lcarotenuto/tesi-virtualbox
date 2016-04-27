@@ -82,7 +82,7 @@ In this thesis we are going to present VirtualBox hypervisor, giving some detail
 \chapter{Introduction}
 
 It is important to point out that the term \textit{Virtual Machine} may have multiple interpretations, so we must first specify which one of those meanings we are referring to.
-
+\\
 When we talk about Virtual Machine (VM), we refer to a \textit{virtualized} computing environment running on top of a physical computing environment; as a result, we get one or more independent VMs, which may be different from the original one.\newline
 Before proceeding, we introduce some terminology:
 \begin{itemize}
@@ -90,7 +90,6 @@ Before proceeding, we introduce some terminology:
 \item \textit{Host}: The physical computing environment that \textit{hosts} one or more VMs.
 \item \textit{Virtual Machine Monitor (VMM)}: The software part that provides support for virtualization. Also known as \textit{Hypervisor}.
 \end{itemize}
-
 The main reason that caused the spread of VMs is the abstraction levels that it introduces; this brings many benefits:
 \begin{itemize}
 \item \textit{Flexibility}: you can run programs compiled for a given Instruction Set Architecture (ISA) and/or a given Operating System (OS) on top of a computer that has a different ISA and/or different OS (e.g. you can test new software on different architectures without \textbf{having} one machine per architecture).
@@ -98,11 +97,10 @@ The main reason that caused the spread of VMs is the abstraction levels that it 
 \item \textit{Resources usage}: one single physical machine may provide multiple services using the 100\% of the resources, instead of using many underutilized physical machines, thus reducing costs and saving energy.
 \item \textit{Mobility}: replicating VMs to other locations is only a matter of copying/transmitting some files; this helps avoiding multiple setups since through a VM you can bring a functioning computing environment ready to use to the user.
 \end{itemize}
-
 As stated before, the term \textit{Virtual Machine} may have several meanings. A generic architecture of the "class" of VMs we will refer to (called \textit{Type 2 System Virtual Machines}), is shown in figure 1.1. In this case the VMM is a regular OS process, that runs in the host OS along with other processes. The VMM can access the physical resources through the OS services, which depend on the specific OS. We will not investigate other classes of Virtual Machines since this topic falls outside this work. 
-\begin{figure}[!h]
+\begin{figure}[!t]
 	\centering
-	\includegraphics[scale=0.5]{img/vm_arch.png}
+	\includegraphics[scale=0.6]{img/vm_arch.png}
 	\caption{Type 2 System Virtual Machine generic architecture}
 \end{figure}
 
@@ -126,7 +124,6 @@ This technique is way more complicated than the previous one. In this case, seve
 \item \textit{code-location}: different address space of the guest and host systems
 \item \textit{state mapping}: the way the VMM maps guest registers and the like to the host ones
 \end{itemize}
-
 It is interesting to notice that both interpretation and dynamic translation can make sense also in the case that guest and host have the same ISA; if this is the case, the translation is simplified since the code can be natively executed on the host machine, without performance losses.\\
 However there are some cases where emulation in software my be necessary. As a typical example, memory accesses to the I/O space may need software emulation. In particular, if the guest wants to access a physical resource that is present on the host (e.g. a network adapter), the VMM cannot allow direct access to the device, because other processes could be accessing the same device at the same time, and, obviously, the host network driver and the guest network driver are not aware of each other. On the other hand, if the guest wants to access a virtual device (which does not exist on the host), the I/O instruction must be \textit{trapped}\footnote{Guest execution is interrupted and the VMM takes control.} in order to emulate the device behavior in software.
 
@@ -219,12 +216,12 @@ In order to understand the software virtualization technique, it is important to
 \end{figure}
 As shown in figure 2.1, there are four privilege levels or \textit{rings}, numbered from 0 to 3, with ring 0 (R0) being the most privileged and ring 3 (R3) being the least. The use of ring allows for system software to restrict task from accessing data or executing privileged instructions. In most environments, the OS and some device drivers run in R0 and applications run in ring 3~\cite{rings}.
 \subsubsection{Software Virtualization}
-In addition to the four privilege rings provided bu the hardware, we need to differentiate between \textit{host context} and \textit{guest context}.
+In addition to the four privilege rings provided by the hardware, we need to differentiate between \textit{host context} and \textit{guest context}.
 \begin{itemize}
 \item In \textit{host context}, everything is as if no VMM was active. This might be the active mode if another application on the host has been scheduled CPU time; in that case, there is a host R3 mode and a host R0 mode.
 \item In \textit{guest context} a VM is active. So long as the guest code is running in ring 3, this is not much of a problem since a hypervisor can set up the page tables properly and run that code natively on the processor. The problems mostly lie in how to intercept what the guest's kernel does.
 \end{itemize}
-When starting a VM, through its R0 support kernel driver, VirtualBox has set up the host system so that it can run most of the guest code natively, but it inserted itself at the "bottom" of the picture. It can then assume control when needed, e.g. if a privileged instruction is executed, the guest \textit{traps}; VirtualBox may then handle this and either route a request to a virtual device or possibly delegate handling such things to the guest or host OS. In guest context, VirtualBox can therefore be in one of three states:
+When starting a VM, VirtualBox sets up the host system through its R0 support kernel driver so that it can run most of the guest code natively, and it inserts itself at the "bottom" of the picture. It can then assume control when needed, e.g. if a privileged instruction is executed, the guest \textit{traps}; VirtualBox may then handle this and either route a request to a virtual device or possibly delegate handling such things to the guest or host OS. In guest context, VirtualBox can therefore be in one of three states:
 \begin{itemize}
 \item Guest R3 code is run unmodified, at full speed, as much as possible. The number of faults will generally be low. This is also referred to as \textit{raw mode}, as the guest R3 code runs unmodified.
 \item For guest code in R0, VirtualBox employs a trick: it actually reconfigures the guest so that its R0 code is run in \textbf{ring-1} (R1) instead. As a result, when guest R0 code (actually running in R1) such as a guest device driver attempts to write to an I/O register or execute a privileged instruction, the VirtualBox hypervisor in "real" R0 can take over.
@@ -265,7 +262,7 @@ Whenever an instruction or event causes a VM exit, the VMCS contains information
 VT-x inherently avoids several of the problems which software virtualization faces. The guest has its own completely separate address space not shared with the hypervisor, which eliminates potential clashes. Additionally, guest OS kernel code runs at privilege R0 in non-root mode, obviating the problems by running R0 code at less privileged levels. Naturally, even at R0 in non-root mode, any I/O access by guest code still causes a VM exit, allowing for device emulation.
 \\
 \\
-We restrict our work to the Hardware Virtualization solutions, because the optimizations we introduce are effective in limiting the amount of switches between root mode and non-root mode.
+We restrict our work to the Hardware Virtualization solutions, because this is the one that maximizes overall performance.
 \subsection{Emulation Threads} \label{subsec:EMT}
 When a VM is started, a user-defined number of SMP processors is assigned to the VM itself. Each CPU is emulated through a so called \textit{Emulation Thread} (EMT), so we have one EMT per SMP processor. An EMT is responsible of executing guest code, emulating devices and handle the transition between host world and guest world. 
 \\
@@ -317,7 +314,7 @@ Ports and connectors are two interfaces that communicate via a callback mechanis
 \paragraph{Ports}
 The methods~\footnote{The "pfn" prefix stands for "pointer to function". It is imposed by VirtualBox coding guidelines.} exported by ports (which are exposed to connectors) are the following:
 \begin{itemize}
-\item \texttt{pfnWaitReceiveAvail} Waits until there is space for receiving data. It also takes as argument the number of milliseconds to wait (timeout). If timeout parameter is 0, then it returns immediately. The return value specifies if there is space available to receive data, if timeout expired or if an error occurred.
+\item \texttt{pfnWaitReceiveAvail} Waits until there is space for receiving data. It also takes the number of milliseconds to wait (timeout) as argument. If timeout parameter is 0, then it returns immediately. The return value specifies if there is space available to receive data, if timeout expired or if an error occurred.
 \item \texttt{pfnReceive} When the connector receives data from the network, it calls this function on the port, so the latter can push data to the guest. This function takes the pointer to available data and the number of bytes in the buffer as arguments.
 \item \texttt{pfnReceiveGso} The same as \texttt{pfnReceive}, but it has and additional argument regarding the \textit{segmentation offloading} context~\footnote{We are not going into details, since in our work we did not implement segmentation offloading.}.
 \item \texttt{pfnXmitPending} This function is used to notify the port that can transmit pending packets (if any).
@@ -338,8 +335,8 @@ Moreover, both interfaces export two other (mandatory) methods: \texttt{pfnConst
 	 	\includegraphics[scale=.75]{img/port_conn_if.png}
 	 	\caption{Example of EMT execution flow}
 	 	\label{img:port_conn_if}
-\end{figure}In this way, when a port wants to send a frame to the network, it invokes the \texttt{pfnBeginXmit} function provided by the connector in order to gain lock access on the connector itself; then it calls \texttt{pfnAllocBuf} function to get a buffer where the port can store the frame and, finally, it invokes \texttt{pfnSendBuf} so that the connector can push the frame (passed as argument) to the network.
-On the other direction, when the connector gets a frame from the network, it invokes the \texttt{pfnWaitReceiveAvail} to whether the port is able to receive data. If this is the case, it immediately calls \texttt{pfnReceive} so that the port can push the received frame (passed as argument) to the guest.
+\end{figure}When a port wants to send a frame to the network, it invokes the \texttt{pfnBeginXmit} function provided by the connector in order to gain lock access on the connector itself; then it calls \texttt{pfnAllocBuf} function to get a buffer where the port can store the frame and, finally, it invokes \texttt{pfnSendBuf} so that the connector can push the frame (passed as argument) to the network.
+On the other direction, when the connector gets a frame from the network, it invokes the \texttt{pfnWaitReceiveAvail} to check whether the port is able to receive data. If this is the case, it immediately calls \texttt{pfnReceive} so that the port can push the received frame (passed as argument) to the guest.
 \\
 A simplified version of the above interaction is depicted in figure~\ref{img:port_conn_if}, where only the \textit{send} and \textit{receive} functions are shown.
 
@@ -362,7 +359,7 @@ The TX ring is an array containing \textit{N} TX descriptors. Each descriptor is
 \\
 Since the ring is stored in physical memory, the adapter must know its physical address. This information is stored in two registers: TDBAL (\textit{Transmit Descriptor Base Address Low}) and TDBAH (\textit{Transmit Descriptor Base Address High}). These are two 32-bit registers that, concatenated, form a 64-bit string of bits which is the physical base address of the ring.
 \\
-Since it is a producer/consumer system, a synchronization mechanism is required between the device driver and the adapter. This is achieved using two \textit{index registers}: the TDT register \textit{Transmit Descriptor Tail} and the TDH register \textit{Transmit Descriptor Head}. The value of these registers represent an \textit{array index} with respect to the TX ring.
+Since it is a producer/consumer system, a synchronization mechanism is required between the device driver and the adapter. This is achieved using two \textit{index registers}: the TDT register (\textit{Transmit Descriptor Tail}) and the TDH register (\textit{Transmit Descriptor Head}). The value of these registers represent an \textit{array index} with respect to the TX ring.
 \\
 \\
 At the beginning, TDT and TDH are initialized to their initial value (0) by the device driver. When the driver wants to send a new frame, it writes the physical address and the length of the frame in the descriptor pointed by TDT register, then it increments the TDT register itself (modulo number-of-descriptors).
@@ -375,7 +372,12 @@ For each new descriptor to process, the device:
 \item Writes the TX descriptor back in order to set the DD flag to 1.
 \item Increments the TDH register circularly. 
 \end{enumerate}
-
+\begin{figure}[!t] 
+	\centering
+	\includegraphics[scale=0.6]{img/tx_ring.png}
+	\caption{TX ring with its registers. Free descriptors are the grey ones, while the pending descriptors are the white ones. \textit{base} is the concatenation of TDBAH and TDBAL registers.}
+	\label{img:tx_ring}
+\end{figure}
 So the adapter can access the next descriptor to be processed with this formula:
 $$Index = base + (TDH \times 16)$$
 Where \textit{base} is the concatenation of TDBAH and TDBAL registers.
@@ -386,14 +388,15 @@ The \textbf{adapter} stop condition is \begin{math}TDH == TDT \end{math}, i.e. t
 In order to prevent the index registers to wrap around, the device driver must never use the last free descriptor. So when the TDT is such that incrementing it circularly would cause \begin{math}TDH == TDT \end{math}, the driver must stop transmitting. This is the \textit{TX ring full} condition.
 \\
 Figure~\ref{img:tx_ring} shows the TX ring with its registers.
-\begin{figure}[!h] 
-	\centering
-	\includegraphics[scale=0.6]{img/tx_ring.png}
-	\caption{TX ring with its registers. Free descriptors are the grey ones, while the pending descriptors are the white ones. \textit{base} is the concatenation of TDBAH and TDBAL registers.}
-	\label{img:tx_ring}
-\end{figure}
 
 \subsection{RX ring}
+\begin{figure}[!t] 
+	\centering
+	\includegraphics[scale=0.6]{img/rx_ring.png}
+	\caption{RX ring with its registers. Filled descriptors are the grey ones, while the available descriptors are the white ones. \textit{base} is the concatenation of RDBAH and RDBAL registers.}
+	\label{img:rx_ring}
+\end{figure}
+
 The RX ring is an array of \textit{N} RX descriptors. Each RX descriptor is 16 bytes long and contains the physical address of the associated buffer, its length and some status flags. Among the others, it contains the DD flag and the EOP flag (just like a TX descriptor). The DD flag is used by the adapter to notify the device driver that a the RX descriptor contains new data to be processed. The EOP flag is used by the adapter to tell the device driver whether that RX descriptor contains a complete packet or only a part of it. So if a packet is spread over \textit{N} RX descriptors, the first \textit{N-1} will descriptors will have the EOP flag set to 0, while the last one will have the flag set to 1.
 \\
 \\
@@ -422,12 +425,6 @@ The \textbf{adapter} stop condition is $RDH == RDT$, i.e. there is no available 
 As for the TX ring, in order to prevent the array indexes to wrap around, the driver should never increment RDT if the increment would cause $RDT == RDH$. This is the full RX ring condition.
 \\
 Figure~\ref{img:rx_ring} shows the RX ring with its registers.
-\begin{figure}[!h] 
-	\centering
-	\includegraphics[scale=0.6]{img/rx_ring.png}
-	\caption{RX ring with its registers. Filled descriptors are the grey ones, while the available descriptors are the white ones. \textit{base} is the concatenation of RDBAH and RDBAL registers.}
-	\label{img:rx_ring}
-\end{figure}
 
 \subsection{e1000 interrupts} \label{subsec:e1000_interrupts}
 The e1000 network adapter can generate interrupts for several reasons, but we are only interested in two of them:
@@ -482,7 +479,7 @@ Every time the EMT finishes handling a VM exit it checks all the event queues be
 When the callback returns, the EMT switches back to the kernelspace and continues scanning all event queues. Finally, when there are no more pending events, it executes a VM entry and resumes executing guest code.
 
 \subsection{TX emulation}
-The TX execution path is performed in by the EMT thread. As described in section ~\ref{sec:e1000_adapter}, when the device driver wants to notify the hardware that a new TX frame is ready to be processed, it writes to the TDT register. This causes a VM exit to occur, so the EMT passes from guest context to host context.
+The TX execution path is performed by the EMT thread. As described in section~\ref{sec:e1000_adapter}, when the device driver wants to notify the hardware that a new TX frame is ready to be processed, it writes to the TDT register. This causes a VM exit to occur, so the EMT passes from guest context to host context.
 \\
 Writing to the TDT register causes the adapter to transmit one or more frames, so the transmission handling must be done in userspace. So the write callback for the TDT register, aside from updating the register value, posts an event to an event queue (\textit{TxQueue}); in this way the EMT, before switching back to the guest world, executes the transmission of frames in userspace.
 \\
@@ -795,7 +792,7 @@ When the port is ready, the thread starts a loop in which:
 \\
 As already mentioned, the VMM will take care of re-initializing the thread when the VM will switch back to \textit{RUNNING} state.
 \end{enumerate}
-\chapter{Optimizations on e1000 emulated device}
+\chapter{Optimizations on e1000 port and netmap connector}
 In chapter 3 we described how we extended VirtualBox so that it can make use of netmap framework. In this chapter we will discuss about the problems and bottlenecks related to the current implementation, analyzing the performance. We will prove that our netmap extension is strictly necessary to achieve much better packet rates and, finally, we will propose some optimizations so that we can improve performance even further. 
 \\
 \\
@@ -1142,8 +1139,8 @@ We successfully improved performance starting from 340 Kpps in the host-only cas
 \bibitem{virtio} \autori{Russel, R.} virtio: towards a de-facto standard for virtual I/O devices.
 \bibitem{rings} \autori{Intel} \textit{Intel 64 and IA-32 Architectures Software Developer's Manual}.
 \bibitem{e1000} \autori{Intel} \textit{PCI/PCI-X Family of Gigabit Ethernet Controllers Software Developers Manual.}
-\bibitem{sdl} SDL project. \url{http://www.libsdl.org/index.php}
 \bibitem{qt} Qt project. \url{http://www.qt.io/}
+\bibitem{sdl} SDL project. \url{http://www.libsdl.org/index.php}
 \end{thebibliography}
 	
 \end{document}
